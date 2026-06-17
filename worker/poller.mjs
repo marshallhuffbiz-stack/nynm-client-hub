@@ -7,7 +7,7 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { detectJobs, shouldRunDigest } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
@@ -91,8 +91,8 @@ async function stateGetSet() {
   };
 }
 
-// CLI entry (launchd runs this).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// CLI entry (launchd runs this). pathToFileURL handles paths with spaces/encoding.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const lock = join(HERE, ".lock");
   try {
     if (existsSync(lock)) {

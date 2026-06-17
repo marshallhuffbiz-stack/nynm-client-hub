@@ -2,6 +2,7 @@ import http from "node:http";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { createStore } from "./store.mjs";
 import { genId, genToken } from "../core/ids.mjs";
 import {
@@ -201,7 +202,7 @@ export function createApp({ storePath, uploadsDir }) {
   });
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const storePath = process.env.STORE || join(process.cwd(), "data", "store.json");
   const port = Number(process.env.PORT || 8787);
   createApp({ storePath }).listen(port, "127.0.0.1", () =>
