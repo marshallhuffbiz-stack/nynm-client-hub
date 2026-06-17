@@ -4,7 +4,10 @@ import { API_BASE } from "./config.js";
 async function http(method, query, body) {
   const res = await fetch(API_BASE + (query || ""), {
     method,
-    headers: body ? { "content-type": "application/json" } : undefined,
+    // text/plain keeps POSTs as "simple" CORS requests (no preflight), which is
+    // required for the live Apps Script backend. The server parses the JSON body
+    // regardless of content-type, so this works for both mock and live.
+    headers: body ? { "content-type": "text/plain;charset=utf-8" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
   let data;

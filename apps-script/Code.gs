@@ -124,8 +124,11 @@ function titleFromDescription_(desc) {
 
 /* ============================ Spreadsheet access layer ============================ */
 
+// Standalone deploy: set SHEET_ID to the target sheet's id and the script opens
+// it by id. Leave SHEET_ID empty ("") for a container-bound deploy.
+var SHEET_ID = "13doR_3WcCSzsGBa6Emd5zHnMiY7leDyJrkJaT0Zoew0";
 function ss_() {
-  return SpreadsheetApp.getActiveSpreadsheet();
+  return SHEET_ID ? SpreadsheetApp.openById(SHEET_ID) : SpreadsheetApp.getActiveSpreadsheet();
 }
 
 function colsFor_(sheetName) {
