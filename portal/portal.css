@@ -1,0 +1,72 @@
+/* Portal-specific styles only. The base design system lives in ../shared/ui.css. */
+
+/* Hide the native file input; the styled <label class="btn"> drives it. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Attachment thumbnail strip on the request form. */
+.thumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+/* A single request card row: title + meta on the left, stage badge on the right. */
+.req {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.req .req-main { min-width: 0; }
+.req .req-title {
+  font-family: var(--head);
+  font-weight: 600;
+  font-size: 15px;
+  margin-bottom: 4px;
+}
+.req .req-desc {
+  color: var(--fog);
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.req .req-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+.req .badge.stage { flex: none; }
+
+/* Event card row. */
+.evt .evt-title {
+  font-family: var(--head);
+  font-weight: 600;
+  font-size: 15px;
+}
+.evt .evt-date {
+  color: var(--send);
+  font-weight: 600;
+  font-size: 13px;
+  margin-top: 2px;
+}
+.evt .evt-desc {
+  color: var(--fog);
+  font-size: 14px;
+  margin-top: 6px;
+}

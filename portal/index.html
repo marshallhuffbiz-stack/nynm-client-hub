@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>NYNM Client Portal</title>
+
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Portal" />
+  <meta name="theme-color" content="#38424b" />
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon.svg" />
+
+  <link rel="stylesheet" href="../shared/ui.css" />
+  <link rel="stylesheet" href="./portal.css" />
+</head>
+<body>
+  <!-- App bar -->
+  <header class="appbar">
+    <div class="wrap">
+      <div class="brandmark">N</div>
+      <div>
+        <h1 id="client-name">Client portal</h1>
+        <div class="sub">Client portal</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- Loading state -->
+    <div id="view-loading" class="card">
+      <div class="muted">Loading your portal…</div>
+    </div>
+
+    <!-- Bad-link state -->
+    <div id="view-badlink" class="card hidden">
+      <h2>This link isn't valid</h2>
+      <p class="muted small">The portal link you used has expired or isn't recognized. Ask your NYNM contact for a fresh link.</p>
+    </div>
+
+    <!-- PIN state -->
+    <form id="view-pin" class="card hidden" autocomplete="off">
+      <h2>Enter your PIN</h2>
+      <p class="muted small">This portal is protected with a short PIN. Enter it to continue.</p>
+      <div style="margin-top:12px">
+        <label for="pin-input">PIN</label>
+        <input id="pin-input" type="password" inputmode="numeric" autocomplete="one-time-code"
+               maxlength="8" placeholder="••••" />
+      </div>
+      <p id="pin-error" class="small hidden" style="color:var(--warn);margin-top:8px">That PIN didn't work. Try again.</p>
+      <button id="pin-submit" type="submit" class="btn primary block" style="margin-top:12px">Open portal</button>
+    </form>
+
+    <!-- Main app -->
+    <div id="view-app" class="hidden">
+      <!-- New request -->
+      <section class="card">
+        <h2>New request</h2>
+        <p class="muted small">Tell us what you need. We'll take it from there.</p>
+
+        <div class="row wrap-row" id="type-chips" role="tablist" style="margin-top:12px">
+          <button type="button" class="chip" data-type="post" role="tab">Post</button>
+          <button type="button" class="chip" data-type="website" role="tab">Website fix</button>
+          <button type="button" class="chip" data-type="design" role="tab">Design</button>
+          <button type="button" class="chip" data-type="event" role="tab">Event</button>
+        </div>
+
+        <!-- Request form (post / website / design) -->
+        <form id="request-form" class="stack hidden" style="margin-top:16px" autocomplete="off">
+          <div>
+            <label for="req-title">Title <span class="muted">(optional)</span></label>
+            <input id="req-title" type="text" placeholder="Short summary" />
+          </div>
+          <div>
+            <label for="req-desc" id="req-desc-label">What do you need?</label>
+            <textarea id="req-desc" placeholder=""></textarea>
+          </div>
+          <div>
+            <label>Photos <span class="muted">(optional)</span></label>
+            <div class="row wrap-row">
+              <label class="btn sm" for="req-files" style="margin:0">Add photos</label>
+              <span id="upload-status" class="muted small"></span>
+            </div>
+            <input id="req-files" type="file" accept="image/*" multiple class="visually-hidden" />
+            <div id="thumbs" class="thumbs hidden"></div>
+          </div>
+          <button id="req-submit" type="submit" class="btn primary block">Submit request</button>
+        </form>
+
+        <!-- Event form -->
+        <form id="event-form" class="stack hidden" style="margin-top:16px" autocomplete="off">
+          <div>
+            <label for="evt-title">Event name</label>
+            <input id="evt-title" type="text" placeholder="e.g. Friday sidewalk sale" />
+          </div>
+          <div>
+            <label for="evt-date">Date</label>
+            <input id="evt-date" type="date" />
+          </div>
+          <div>
+            <label for="evt-desc">Details <span class="muted">(optional)</span></label>
+            <textarea id="evt-desc" placeholder="What's happening, and anything we should know."></textarea>
+          </div>
+          <button id="evt-submit" type="submit" class="btn primary block">Add to calendar</button>
+        </form>
+      </section>
+
+      <!-- Your requests -->
+      <div class="section-label">Your requests</div>
+      <div id="requests-list"></div>
+
+      <!-- Upcoming events -->
+      <div class="section-label">Upcoming events</div>
+      <div id="events-list"></div>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

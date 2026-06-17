@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>NYNM Request Desk</title>
+
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Desk" />
+  <meta name="theme-color" content="#38424b" />
+
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./icon.svg" />
+
+  <link rel="stylesheet" href="../shared/ui.css" />
+  <link rel="stylesheet" href="./desk.css" />
+</head>
+<body>
+  <!-- App bar -->
+  <header class="appbar">
+    <div class="wrap">
+      <div class="brandmark">N</div>
+      <div>
+        <h1>Request Desk</h1>
+        <div class="sub">Every client request, one queue</div>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <!-- Loading state -->
+    <div id="view-loading" class="card">
+      <div class="muted">Loading the desk…</div>
+    </div>
+
+    <!-- Bad-token state -->
+    <div id="view-badtoken" class="card hidden">
+      <h2>This link isn't valid</h2>
+      <p class="muted small">The admin link you used isn't recognized. Open the Request Desk with your <code>?k=</code> admin token in the URL.</p>
+    </div>
+
+    <!-- Main app -->
+    <div id="view-app" class="hidden">
+      <!-- Top tab switch -->
+      <nav id="tabs" class="tabs" role="tablist" aria-label="Desk views">
+        <button class="tab active" data-view="requests" role="tab" aria-selected="true">
+          Requests <span class="tab-count" id="count-requests"></span>
+        </button>
+        <button class="tab" data-view="events" role="tab" aria-selected="false">
+          Events <span class="tab-count" id="count-events"></span>
+        </button>
+        <button class="tab" data-view="clients" role="tab" aria-selected="false">
+          Clients <span class="tab-count" id="count-clients"></span>
+        </button>
+      </nav>
+
+      <!-- Requests view -->
+      <section id="panel-requests" class="panel" role="tabpanel">
+        <div class="filters">
+          <div class="row wrap-row" id="stage-chips" aria-label="Filter by stage"></div>
+          <div class="row wrap-row" id="client-chips" aria-label="Filter by client"></div>
+        </div>
+        <div id="requests-list"></div>
+      </section>
+
+      <!-- Events view -->
+      <section id="panel-events" class="panel hidden" role="tabpanel">
+        <div id="events-list"></div>
+      </section>
+
+      <!-- Clients view -->
+      <section id="panel-clients" class="panel hidden" role="tabpanel">
+        <div id="clients-list"></div>
+
+        <div class="section-label">Add a client</div>
+        <form id="client-form" class="card stack" autocomplete="off">
+          <div>
+            <label for="cl-id">Client ID <span class="muted">(slug, e.g. the-o)</span></label>
+            <input id="cl-id" type="text" placeholder="the-o" required />
+          </div>
+          <div>
+            <label for="cl-name">Display name</label>
+            <input id="cl-name" type="text" placeholder="The O" required />
+          </div>
+          <div>
+            <label for="cl-brand">Brand slug <span class="muted">(optional)</span></label>
+            <input id="cl-brand" type="text" placeholder="the-o" />
+          </div>
+          <div>
+            <label for="cl-pin">PIN <span class="muted">(optional, 4 digits)</span></label>
+            <input id="cl-pin" type="text" inputmode="numeric" maxlength="8" placeholder="leave blank for none" />
+          </div>
+          <button id="cl-submit" type="submit" class="btn primary block">Save client</button>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
