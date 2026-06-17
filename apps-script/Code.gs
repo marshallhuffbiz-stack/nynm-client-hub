@@ -366,7 +366,9 @@ function doGet(e) {
   try {
     var p = (e && e.parameter) || {};
     var admin = p.admin;
-    var c = p.c;
+    // GET client token comes in as ?client= (Google's web-app frontend reserves
+    // the single-letter param ?c=, returning a 400 before the script runs).
+    var c = p.client != null && p.client !== "" ? p.client : p.c;
 
     if (admin != null && admin !== undefined && admin !== "") {
       if (admin !== getAdminToken_()) {
@@ -401,7 +403,7 @@ function doGet(e) {
     }
 
     // No recognized query param. Mirror: nothing matched -> generic error.
-    return json_(400, { ok: false, error: "missing query (?c= or ?admin=)" });
+    return json_(400, { ok: false, error: "missing query (?client= or ?admin=)" });
   } catch (err) {
     return json_(500, { ok: false, error: String((err && err.message) || err) });
   }

@@ -65,7 +65,7 @@ export function createApp({ storePath, uploadsDir }) {
       if (req.method === "GET") {
         const data = await store.read();
         const admin = url.searchParams.get("admin");
-        const c = url.searchParams.get("c");
+        const c = url.searchParams.get("client") || url.searchParams.get("c");
         if (admin != null) {
           if (admin !== data.settings?.adminToken) return send(res, 403, { ok: false, error: "bad admin token" });
           return send(res, 200, { ok: true, clients: data.clients, requests: data.requests, events: data.events });
