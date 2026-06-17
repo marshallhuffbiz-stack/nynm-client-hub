@@ -13,7 +13,11 @@ async function http(method, query, body) {
   } catch {
     data = { ok: false, error: "bad json from server" };
   }
-  return { status: res.status, ...data };
+  // Mock returns real HTTP statuses; live Apps Script always returns 200 and
+  // carries the intended status in the body. Prefer the body status when present
+  // so the UIs behave identically in both modes.
+  const status = typeof data.status === "number" ? data.status : res.status;
+  return { ...data, status };
 }
 
 // Client Portal — secret token in the URL (?c=…), optional PIN.
