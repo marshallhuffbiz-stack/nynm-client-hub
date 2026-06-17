@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NYNM Client Portal">
+  <rect width="512" height="512" rx="112" fill="#38424b"/>
+  <text x="256" y="256" fill="#f4f1ea" font-family="Archivo, system-ui, -apple-system, sans-serif"
+        font-size="300" font-weight="700" text-anchor="middle" dominant-baseline="central"
+        letter-spacing="-12">N</text>
+</svg>
