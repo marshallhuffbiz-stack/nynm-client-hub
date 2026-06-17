@@ -1,0 +1,6 @@
+.auto/
+node_modules/
+.DS_Store
+data/*.json
+worker/config.json
+*.local.json
