@@ -114,3 +114,21 @@ test("uploadAttachment stores a file and returns a fetchable url", async () => {
   assert.equal(got.status, 200);
   assert.equal(await got.text(), "hello-pixels");
 });
+
+test("deleteRequest removes a request (admin only); 404 for a missing id", async () => {
+  const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "a test submission to delete" } });
+  const id = created.body.id;
+  // a client cannot delete
+  const forbidden = await post({ c: "tok-o", action: "deleteRequest", id });
+  assert.equal(forbidden.status, 403);
+  // admin deletes it
+  const del = await post({ admin: "testadmin", action: "deleteRequest", id });
+  assert.equal(del.status, 200);
+  assert.equal(del.body.deleted, true);
+  // it is gone from the admin view
+  const av = await get("?admin=testadmin");
+  assert.equal(av.body.requests.find((r) => r.id === id), undefined);
+  // deleting a missing id 404s
+  const missing = await post({ admin: "testadmin", action: "deleteRequest", id: "req_nope" });
+  assert.equal(missing.status, 404);
+});

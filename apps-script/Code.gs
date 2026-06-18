@@ -444,7 +444,7 @@ function doPost(e) {
       }
     }
 
-    if (["updateRequest", "promoteEvent", "upsertClient"].indexOf(action) >= 0 && !adminOk) {
+    if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].indexOf(action) >= 0 && !adminOk) {
       return json_(403, { ok: false, error: "admin required" });
     }
     if (["submitRequest", "addEvent", "uploadAttachment"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
@@ -481,6 +481,9 @@ function doPost(e) {
         case "upsertClient":
           result = handleUpsertClient_(body);
           break;
+        case "deleteRequest":
+          result = handleDeleteRequest_(body);
+          break;
         default:
           result = { code: 400, obj: { ok: false, error: "unknown action" } };
       }
@@ -494,6 +497,20 @@ function doPost(e) {
 }
 
 /* ============================ POST action handlers (mirror mock switch) ============================ */
+
+// Hard-delete a request row (admin only). Lets tests / accidental submissions be
+// removed from the history. Mirrors the mock's data.requests.splice().
+function handleDeleteRequest_(body) {
+  var requests = readAll_(SHEET_REQUESTS);
+  var rec = null;
+  for (var i = 0; i < requests.length; i++) {
+    if (requests[i].id === body.id) { rec = requests[i]; break; }
+  }
+  if (!rec) return { code: 404, obj: { ok: false, error: "not found" } };
+  var sheet = getOrCreateSheet_(SHEET_REQUESTS, colsFor_(SHEET_REQUESTS));
+  sheet.deleteRow(rec.__row);
+  return { code: 200, obj: { ok: true, id: body.id, deleted: true } };
+}
 
 function handleSubmitRequest_(body, client) {
   var input = {};

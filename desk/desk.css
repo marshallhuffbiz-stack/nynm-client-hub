@@ -47,6 +47,19 @@
 .req-desc { color: var(--label); font-size: 16px; letter-spacing: -0.2px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
 .req-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
+/* per-request delete control — quiet by default, destructive red on hover/focus */
+.req-del {
+  margin-left: auto; align-self: flex-start; flex: none;
+  width: 40px; height: 40px; border-radius: var(--r-button-sm);
+  display: grid; place-items: center; cursor: pointer;
+  border: none; background: transparent; color: var(--label-3);
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform 120ms var(--ease);
+}
+.req-del:hover { color: var(--red); background: var(--red-fill); }
+.req-del:active { transform: scale(0.92); }
+.req-del:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--red-fill); }
+.req-del svg { width: 18px; height: 18px; display: block; }
+
 /* card that is done reads quieter */
 .card.is-done { opacity: 0.6; }
 .card.is-done .req-title { font-weight: 500; }

@@ -38,6 +38,7 @@ export const deskApi = (adminToken) => ({
   update: (id, patch) => http("POST", "", { admin: adminToken, action: "updateRequest", id, patch }),
   promote: (eventId) => http("POST", "", { admin: adminToken, action: "promoteEvent", eventId }),
   upsertClient: (client) => http("POST", "", { admin: adminToken, action: "upsertClient", client }),
+  remove: (id) => http("POST", "", { admin: adminToken, action: "deleteRequest", id }),
 });
 
 // Turn a File object into the {name,mime,dataBase64} the upload action expects.

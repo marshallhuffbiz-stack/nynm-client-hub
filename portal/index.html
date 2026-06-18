@@ -3,26 +3,39 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>NYNM Client Portal</title>
+  <title>Relay · Not Your Normal Marketing</title>
 
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="Portal" />
-  <meta name="theme-color" content="#f2f2f7" />
+  <meta name="apple-mobile-web-app-title" content="Relay" />
+  <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="./icon.svg" />
+  <link rel="icon" href="../shared/relay-mark.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="../shared/relay-icon-180.png" />
 
   <link rel="stylesheet" href="../shared/ui.css" />
   <link rel="stylesheet" href="./portal.css" />
 </head>
 <body>
-  <!-- Nav bar -->
+  <!-- Liquid Glass nav: the Relay wordmark (the one branded element) -->
   <header class="appbar">
     <div class="wrap">
-      <img class="nav-mark" src="../shared/brands/nynm-mark.png" alt="Not Your Normal Marketing" />
-      <div class="nav-title">Client Portal</div>
+      <div class="wordmark" role="img" aria-label="Relay, by Not Your Normal Marketing">
+        <svg class="wordmark-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true" focusable="false">
+          <g stroke="currentColor" stroke-width="3.6" stroke-linecap="round">
+            <path d="M20 6 V34" />
+            <path d="M6 20 H34" />
+            <path d="M10.1 10.1 L29.9 29.9" />
+            <path d="M29.9 10.1 L10.1 29.9" />
+          </g>
+        </svg>
+        <span class="wordmark-text" aria-hidden="true">
+          <span class="wordmark-name">Relay</span>
+          <span class="wordmark-by">by Not Your Normal Marketing</span>
+        </span>
+      </div>
     </div>
   </header>
 
@@ -62,13 +75,15 @@
       <!-- New request -->
       <section class="card">
         <h2>New request</h2>
-        <p class="muted small">Tell us what you need. We'll take it from there.</p>
+        <p class="muted small">Tell us what you need. We take it from there.</p>
 
-        <div class="row wrap-row" id="type-chips" role="tablist" style="margin-top:12px">
-          <button type="button" class="chip" data-type="post" role="tab">Post</button>
-          <button type="button" class="chip" data-type="website" role="tab">Website fix</button>
-          <button type="button" class="chip" data-type="design" role="tab">Design</button>
-          <button type="button" class="chip" data-type="event" role="tab">Event</button>
+        <!-- iOS segmented control: request type -->
+        <div class="seg" id="type-chips" role="tablist" aria-label="Request type" style="margin-top:14px">
+          <span class="seg-thumb" aria-hidden="true"></span>
+          <button type="button" class="seg-btn" data-type="post" role="tab" aria-selected="true">Post</button>
+          <button type="button" class="seg-btn" data-type="website" role="tab" aria-selected="false">Website fix</button>
+          <button type="button" class="seg-btn" data-type="design" role="tab" aria-selected="false">Design</button>
+          <button type="button" class="seg-btn" data-type="event" role="tab" aria-selected="false">Event</button>
         </div>
 
         <!-- Request form (post / website / design) -->
