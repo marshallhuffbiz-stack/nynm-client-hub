@@ -2,6 +2,8 @@
 
 **Date:** 2026-06-17 · **Deliverable:** code · **Surface:** product UI (two vanilla HTML/CSS/JS PWAs, mobile-first / installed iPhone PWA, also opened on desktop) · **Mode:** redesign
 
+> **Amendment — 2026-06-18 (Relay rebrand + Liquid Glass pass).** The product is now **Relay by Not Your Normal Marketing**. The in-app mark is the **Relay wordmark** — an 8-spoke asterisk + "Relay" set in Archivo (the one web font loaded, for the wordmark only) with "by Not Your Normal Marketing" beneath — replacing the NYNM badge in the nav. The exact Apple token set now in `shared/ui.css` (`--label:#000`, `--nav-glass`, `--fill-input`, the radii scale, **plus a full `prefers-color-scheme: dark` block**) is the source of truth and supersedes the light-only values below where they differ; **dark mode is in scope.** The portal request-type picker is a true iOS segmented control (sliding white thumb). Two functional additions: per-request **delete** on the Desk (admin-gated, confirmed), and a tap-to-view **full-image lightbox** for the cropped staged-draft preview and attachment thumbnails. Everything else below still holds.
+
 > **Reading order for every later phase:** this brief is law. Where a builder skill's default, the `impeccable` product-register default, or the existing NYNM `shared/ui.css` tokens conflict with what is written here, **this brief wins.** The Apple direction below is a **brand override** (treat the tokens like a client brand profile that beats authority defaults). The one carve-out: the **Not Your Normal Marketing logo stays** as the app mark — the visual *language* is Apple, the *mark* is NYNM.
 
 ---

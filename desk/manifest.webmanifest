@@ -1,15 +1,15 @@
 {
-  "name": "NYNM Request Desk",
-  "short_name": "Desk",
-  "description": "Internal control panel for all client requests.",
+  "name": "Relay Desk · Not Your Normal Marketing",
+  "short_name": "Relay Desk",
+  "description": "Internal control panel for every client request.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#f4f1ea",
-  "theme_color": "#38424b",
+  "background_color": "#F2F2F7",
+  "theme_color": "#F2F2F7",
   "icons": [
-    { "src": "./icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any" },
-    { "src": "./icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "maskable" }
+    { "src": "../shared/relay-icon-192.png", "type": "image/png", "sizes": "192x192", "purpose": "any maskable" },
+    { "src": "../shared/relay-icon-512.png", "type": "image/png", "sizes": "512x512", "purpose": "any maskable" }
   ]
 }

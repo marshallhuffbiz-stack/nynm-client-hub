@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" fill="none" role="img" aria-label="Relay">
+  <g stroke="#007AFF" stroke-width="3.6" stroke-linecap="round">
+    <path d="M20 6 V34" />
+    <path d="M6 20 H34" />
+    <path d="M10.1 10.1 L29.9 29.9" />
+    <path d="M29.9 10.1 L10.1 29.9" />
+  </g>
+</svg>

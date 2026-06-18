@@ -3,26 +3,39 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>NYNM Request Desk</title>
+  <title>Relay Desk · Not Your Normal Marketing</title>
 
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="Desk" />
-  <meta name="theme-color" content="#f2f2f7" />
+  <meta name="apple-mobile-web-app-title" content="Relay Desk" />
+  <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 
   <link rel="manifest" href="./manifest.webmanifest" />
-  <link rel="icon" href="./icon.svg" type="image/svg+xml" />
-  <link rel="apple-touch-icon" href="./icon.svg" />
+  <link rel="icon" href="../shared/relay-mark.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="../shared/relay-icon-180.png" />
 
   <link rel="stylesheet" href="../shared/ui.css" />
   <link rel="stylesheet" href="./desk.css" />
 </head>
 <body>
-  <!-- Nav bar -->
+  <!-- Liquid Glass nav: the Relay wordmark (the one branded element) -->
   <header class="appbar">
     <div class="wrap">
-      <img class="nav-mark" src="../shared/brands/nynm-mark.png" alt="Not Your Normal Marketing" />
-      <div class="nav-title">Request Desk</div>
+      <div class="wordmark" role="img" aria-label="Relay, by Not Your Normal Marketing">
+        <svg class="wordmark-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true" focusable="false">
+          <g stroke="currentColor" stroke-width="3.6" stroke-linecap="round">
+            <path d="M20 6 V34" />
+            <path d="M6 20 H34" />
+            <path d="M10.1 10.1 L29.9 29.9" />
+            <path d="M29.9 10.1 L10.1 29.9" />
+          </g>
+        </svg>
+        <span class="wordmark-text" aria-hidden="true">
+          <span class="wordmark-name">Relay</span>
+          <span class="wordmark-by">by Not Your Normal Marketing</span>
+        </span>
+      </div>
     </div>
   </header>
 

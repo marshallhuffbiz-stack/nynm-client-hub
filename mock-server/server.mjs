@@ -92,7 +92,7 @@ export function createApp({ storePath, uploadsDir }) {
         const adminOk = body.admin && body.admin === data0.settings?.adminToken;
         const client = body.c ? data0.clients.find((x) => x.token === body.c) : null;
 
-        if (["updateRequest", "promoteEvent", "upsertClient"].includes(action) && !adminOk)
+        if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].includes(action) && !adminOk)
           return send(res, 403, { ok: false, error: "admin required" });
         if (["submitRequest", "addEvent", "uploadAttachment"].includes(action) && !client && !adminOk)
           return send(res, 403, { ok: false, error: "client link required" });
@@ -151,6 +151,12 @@ export function createApp({ storePath, uploadsDir }) {
               delete patch._note;
               data.requests[idx] = mergePatch(cur, patch, now());
               return { code: 200, obj: { ok: true, request: data.requests[idx] } };
+            }
+            case "deleteRequest": {
+              const idx = data.requests.findIndex((r) => r.id === body.id);
+              if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
+              const [removed] = data.requests.splice(idx, 1);
+              return { code: 200, obj: { ok: true, id: removed.id, deleted: true } };
             }
             case "promoteEvent": {
               const ev = data.events.find((e) => e.eventId === body.eventId);

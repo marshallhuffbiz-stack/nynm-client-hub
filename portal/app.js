@@ -1,6 +1,7 @@
-// NYNM Client Portal — client-facing PWA.
+// Relay — client-facing PWA (request portal).
 // Plain ES module, no build step. Talks to the shared API client.
 import { portalApi, fileToPayload } from "../shared/api.js";
+import { openLightbox } from "../shared/lightbox.js";
 
 /* ---------- token + api ---------- */
 
@@ -63,25 +64,26 @@ const DESC_HINTS = {
 };
 
 // stage -> { label, badge color class }
+// Client-facing status scheme: New (gray) -> In progress (blue) -> Ready (green) -> Posted (gray).
 const STAGE_LABELS = {
-  submitted: "Submitted",
-  queued: "Queued",
+  submitted: "New",
+  queued: "In progress",
   drafting: "In progress",
+  changes: "In progress",
   ready: "Ready",
-  changes: "Revising",
-  approved: "Approved",
-  shipping: "Publishing",
-  done: "Done",
+  approved: "Ready",
+  shipping: "Ready",
+  done: "Posted",
 };
 const STAGE_BADGE = {
-  submitted: "bone",
-  queued: "bone",
-  drafting: "warn",
-  changes: "warn",
-  ready: "send",
+  submitted: "bone",   // New -> gray
+  queued: "send",      // In progress -> blue
+  drafting: "send",
+  changes: "send",
+  ready: "go",         // Ready -> green
   approved: "go",
   shipping: "go",
-  done: "go",
+  done: "bone",        // Posted -> gray
 };
 
 const TYPE_LABELS = {
@@ -171,7 +173,7 @@ function renderRequests(requests) {
 
   if (list.length === 0) {
     requestsList.innerHTML =
-      `<div class="card"><div class="empty">No requests yet. Submit your first one above.</div></div>`;
+      `<div class="card"><div class="empty">No requests yet. Send your first one above.</div></div>`;
     return;
   }
 
@@ -207,7 +209,7 @@ function renderEvents(events) {
 
   if (list.length === 0) {
     eventsList.innerHTML =
-      `<div class="card"><div class="empty">No events on the calendar yet. Add one above to plan ahead.</div></div>`;
+      `<div class="card"><div class="empty">Nothing scheduled yet. Add an event to plan ahead.</div></div>`;
     return;
   }
 
@@ -238,7 +240,7 @@ function renderThumbs() {
   thumbsEl.innerHTML = pendingAttachments.map((a) => {
     const isImage = (a.mime || "").startsWith("image/") && a.url;
     const inner = isImage
-      ? `<img src="${esc(a.url)}" alt="${esc(a.name || "attachment")}" />`
+      ? `<img class="zoomable" src="${esc(a.url)}" alt="${esc(a.name || "attachment")}" />`
       : `<span class="small">file</span>`;
     return `<div class="thumb" title="${esc(a.name || "")}">${inner}</div>`;
   }).join("");
@@ -249,11 +251,18 @@ function renderThumbs() {
 function selectType(type) {
   selectedType = type;
 
-  // Toggle active chip state.
-  for (const chip of typeChips.querySelectorAll(".chip")) {
-    const active = chip.dataset.type === type;
-    chip.classList.toggle("active", active);
-    chip.setAttribute("aria-selected", active ? "true" : "false");
+  // Update the segmented control: aria-selected per segment + slide the white thumb.
+  const btns = Array.from(typeChips.querySelectorAll(".seg-btn"));
+  let idx = 0;
+  btns.forEach((btn, i) => {
+    const active = btn.dataset.type === type;
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+    if (active) idx = i;
+  });
+  const thumb = typeChips.querySelector(".seg-thumb");
+  if (thumb && btns.length) {
+    thumb.style.width = `calc((100% - 4px) / ${btns.length})`;
+    thumb.style.transform = `translateX(${idx * 100}%)`;
   }
 
   const isEvent = type === "event";
@@ -424,7 +433,8 @@ function applyData(data) {
   const client = (data && data.client) || {};
   const name = client.name || "Your business";
   clientNameEl.textContent = name;
-  document.title = `${name} · NYNM Portal`;
+  document.querySelector(".large-title")?.classList.remove("hidden");
+  document.title = `${name} · Relay`;
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
 }
@@ -521,13 +531,27 @@ async function onPinSubmit(event) {
 /* ---------- wire up ---------- */
 
 typeChips.addEventListener("click", (e) => {
-  const chip = e.target.closest(".chip");
-  if (chip && chip.dataset.type) selectType(chip.dataset.type);
+  const btn = e.target.closest(".seg-btn");
+  if (btn && btn.dataset.type) selectType(btn.dataset.type);
+});
+// Arrow-key navigation for the segmented control (role=tablist).
+typeChips.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const btns = Array.from(typeChips.querySelectorAll(".seg-btn"));
+  const i = btns.findIndex((b) => b.dataset.type === selectedType);
+  const ni = e.key === "ArrowRight" ? Math.min(btns.length - 1, i + 1) : Math.max(0, i - 1);
+  if (ni !== i && btns[ni]) { selectType(btns[ni].dataset.type); btns[ni].focus(); e.preventDefault(); }
 });
 requestForm.addEventListener("submit", submitRequest);
 eventForm.addEventListener("submit", submitEvent);
 reqFiles.addEventListener("change", onFilesPicked);
 $("view-pin").addEventListener("submit", onPinSubmit);
+
+// Tap an attachment preview to view it full size.
+thumbsEl.addEventListener("click", (e) => {
+  const img = e.target.closest(".thumb img");
+  if (img && img.src) openLightbox(img.src, img.alt || "attachment");
+});
 
 // Default selection + initial load.
 selectType("post");

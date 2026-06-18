@@ -1,52 +1,74 @@
-/* NYNM Client Hub — shared design system.
-   Direction: iOS 17/18 (Apple Human Interface Guidelines). San Francisco served by the OS,
-   Apple light-mode system colors, grouped-inset layout, one systemBlue interaction accent.
-   See DESIGN-BRIEF.md — that brief is law. DOM class names are preserved from the original
-   markup so app.js keeps working; only the visual layer changed. */
+/* Relay by Not Your Normal Marketing — shared design system.
+   Direction: iOS / Apple HIG, current "Liquid Glass" era. San Francisco served by the OS,
+   Apple system colors with a real dark mode, grouped-inset layout, one systemBlue accent,
+   a frosted top bar. The one branded element is the Relay wordmark (Archivo). See
+   DESIGN-BRIEF.md. DOM class names are preserved so app.js keeps working; this is the
+   presentation layer. Token values below are the exact spec set; prior token names are
+   aliased onto them so existing rules keep resolving and inherit dark mode for free. */
 
 :root {
-  /* Type — San Francisco, served by the OS (no web font, by design) */
-  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  /* Type — San Francisco, served by the OS (no web font for UI, by design) */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", system-ui, sans-serif;
+  /* Relay wordmark face — the NYNM industrial grotesque (the ONE branded element). */
+  --font-wordmark: "Archivo", var(--font);
 
-  /* Apple light-mode system colors */
-  --bg: #f2f2f7;                    /* systemGroupedBackground — the field behind cards */
-  --card: #ffffff;                  /* secondarySystemGroupedBackground — cards / rows */
-  --label: #1c1c1e;                 /* label — primary text */
-  --label-2: rgba(60, 60, 67, 0.6); /* secondaryLabel */
-  --label-3: rgba(60, 60, 67, 0.3); /* tertiaryLabel — placeholder / faint */
-  --separator: rgba(60, 60, 67, 0.29); /* separator — hairlines, rendered 0.5px */
-  --blue: #007aff;                  /* systemBlue — the one interaction accent */
-  --green: #34c759;                 /* systemGreen — status only */
-  --orange: #ff9500;                /* systemOrange — status only */
-  --red: #ff3b30;                   /* systemRed — status only */
-  --gray: #8e8e93;                  /* systemGray */
-  --gray3: #c7c7cc;
-  --gray5: #e5e5ea;
-  --gray6: #f2f2f7;
-  --on-accent: #ffffff;             /* glyph/text on a filled accent control */
+  /* ===== Apple system tokens — exact spec values (light) ===== */
+  --blue: #007AFF;                      /* systemBlue — the one interaction accent */
+  --bg-grouped: #F2F2F7;                /* app background, the field behind cards */
+  --card: #FFFFFF;                      /* cards / list rows */
+  --label: #000000;                     /* primary text */
+  --label-secondary: rgba(60,60,67,0.60);
+  --label-tertiary: rgba(60,60,67,0.30);
+  --placeholder: rgba(60,60,67,0.30);
+  --fill-input: rgba(118,118,128,0.12); /* flat control fill */
+  --separator: rgba(60,60,67,0.29);     /* hairlines, rendered 0.5px */
+  --nav-border: rgba(0,0,0,0.10);
+  --green: #34C759;                     /* status only */
+  --orange: #FF9500;                    /* status only */
+  --red: #FF3B30;                       /* status only */
+  --gray: #8E8E93;
+  --nav-glass: rgba(255,255,255,0.72);  /* frosted top-bar material */
 
-  /* Tinted fills — accent text on the same accent @ 12–16% (Apple convention) */
-  --blue-fill: rgba(0, 122, 255, 0.12);
-  --green-fill: rgba(52, 199, 89, 0.16);
-  --orange-fill: rgba(255, 149, 0, 0.16);
-  --red-fill: rgba(255, 59, 48, 0.12);
-  --gray-fill: rgba(118, 118, 128, 0.12);  /* tertiarySystemFill */
-  --gray-fill-2: rgba(118, 118, 128, 0.2); /* hover / pressed neutral */
+  /* Gray ramp + on-accent */
+  --gray3: #C7C7CC;
+  --gray5: #E5E5EA;
+  --gray6: #F2F2F7;
+  --on-accent: #FFFFFF;
 
-  /* Radii — continuous-corner feel */
-  --r-card: 18px;
-  --r-control: 12px;
-  --r-field: 12px;
-  --r-avatar: 22.5%;   /* iOS app-icon squircle approximation */
-  --r-pill: 980px;
+  /* Tinted status fills — semantic color @ 12–16% */
+  --blue-fill: rgba(0,122,255,0.12);
+  --green-fill: rgba(52,199,89,0.16);
+  --orange-fill: rgba(255,149,0,0.16);
+  --red-fill: rgba(255,59,48,0.12);
+  --gray-fill: var(--fill-input);            /* tertiary fill == input fill */
+  --gray-fill-2: rgba(118,118,128,0.20);     /* hover / pressed neutral */
+  --toast-bg: rgba(28,28,30,0.92);
 
-  /* Elevation — one soft, low shadow */
-  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.03), 0 5px 18px rgba(0, 0, 0, 0.045);
-  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.16);
-  --shadow-segment: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+  /* ===== Aliases: prior names -> spec tokens (resolve through dark mode automatically) ===== */
+  --bg: var(--bg-grouped);
+  --label-2: var(--label-secondary);
+  --label-3: var(--label-tertiary);
+
+  /* Radii — exact spec (continuous feel) */
+  --r-card: 16px;
+  --r-input: 10px;
+  --r-button: 980px;     /* capsule for primary CTA */
+  --r-button-sm: 12px;   /* secondary buttons */
+  --r-seg: 9px;          /* segmented-control track */
+  --r-seg-thumb: 7px;    /* segmented-control thumb */
+  /* prior-name radii aliases */
+  --r-control: var(--r-button-sm);
+  --r-field: var(--r-input);
+  --r-avatar: 22.5%;     /* iOS app-icon squircle approximation */
+  --r-pill: var(--r-button);
+
+  /* Elevation — grouped iOS leans on bg contrast, not shadow */
+  --shadow-card: none;
+  --shadow-pop: 0 10px 40px rgba(0,0,0,0.22);
+  --shadow-segment: 0 1px 3px rgba(0,0,0,0.12);
 
   /* Motion — Apple curves */
-  --ease: cubic-bezier(0.32, 0.72, 0, 1);   /* confident ease-out (apple.com) */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --dur-fast: 200ms;
   --dur: 350ms;
@@ -55,6 +77,51 @@
   --nav-h: 50px;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+}
+
+/* ===================== Dark mode (Apple system dark) ===================== */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --blue: #0A84FF;
+    --bg-grouped: #000000;
+    --card: #1C1C1E;
+    --label: #FFFFFF;
+    --label-secondary: rgba(235,235,245,0.60);
+    --label-tertiary: rgba(235,235,245,0.30);
+    --placeholder: rgba(235,235,245,0.30);
+    --fill-input: rgba(118,118,128,0.24);
+    --separator: rgba(84,84,88,0.60);
+    --nav-border: rgba(255,255,255,0.12);
+    --green: #30D158;
+    --orange: #FF9F0A;
+    --red: #FF453A;
+    --gray: #8E8E93;
+    --nav-glass: rgba(28,28,30,0.72);
+
+    --gray3: #48484A;
+    --gray5: #2C2C2E;
+    --gray6: #2C2C2E;
+
+    --blue-fill: rgba(10,132,255,0.22);
+    --green-fill: rgba(48,209,88,0.22);
+    --orange-fill: rgba(255,159,10,0.22);
+    --red-fill: rgba(255,69,58,0.22);
+    --gray-fill-2: rgba(118,118,128,0.32);
+    --toast-bg: rgba(58,58,60,0.92);
+
+    --shadow-pop: 0 10px 40px rgba(0,0,0,0.6);
+    --shadow-segment: 0 1px 3px rgba(0,0,0,0.5);
+  }
+}
+
+/* The ONE web font: Archivo, loaded only for the Relay wordmark (the sanctioned
+   brand element). All UI text stays on the OS San Francisco stack. */
+@font-face {
+  font-family: "Archivo";
+  src: url("./fonts/archivo-variable-latin.woff2") format("woff2");
+  font-weight: 400 800;
+  font-stretch: 75% 125%;
+  font-display: swap;
 }
 
 * { box-sizing: border-box; }
@@ -70,6 +137,7 @@ body {
   letter-spacing: -0.2px;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  -webkit-overflow-scrolling: touch;   /* momentum scrolling on iOS */
 }
 
 /* Centered content column, iOS 16px side gutters */
@@ -79,33 +147,56 @@ body {
   padding: 16px 16px calc(96px + var(--safe-b));
 }
 
-/* ===================== Nav bar (the one vibrancy material) ===================== */
+/* ===================== Liquid Glass nav (the one vibrancy material) =====================
+   Frosted, legible, not see-through (iOS 27 dialed transparency back). Content scrolls
+   and blurs under it. */
 .appbar {
   position: sticky; top: 0; z-index: 20;
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--nav-glass);
   -webkit-backdrop-filter: saturate(180%) blur(20px);
   backdrop-filter: saturate(180%) blur(20px);
-  border-bottom: 0.5px solid var(--separator);
+  border-bottom: 0.5px solid var(--nav-border);
   padding-top: var(--safe-t);
 }
 .appbar .wrap {
   min-height: var(--nav-h);
-  padding-top: 9px; padding-bottom: 9px;
+  padding-top: 8px; padding-bottom: 8px;
   display: flex; align-items: center; gap: 10px;
 }
-.nav-mark {
-  width: 32px; height: 32px; border-radius: var(--r-avatar);
-  object-fit: contain; flex: none; display: block;
+
+/* ----- Relay wordmark: the one branded element (asterisk mark + Archivo name + attribution) ----- */
+.wordmark {
+  display: inline-flex; align-items: center; gap: 9px;
+  text-decoration: none; color: inherit; -webkit-user-select: none; user-select: none;
 }
-.nav-title {
-  font-size: 17px; font-weight: 600; letter-spacing: -0.3px; color: var(--label);
+.wordmark-mark {
+  width: 23px; height: 23px; flex: none; display: block;
+  color: var(--blue);   /* the 8-spoke asterisk inherits this via currentColor */
 }
+.wordmark-text { display: flex; flex-direction: column; line-height: 1; min-width: 0; }
+.wordmark-name {
+  font-family: var(--font-wordmark);
+  font-weight: 800; font-size: 21px; line-height: 1; letter-spacing: -0.5px;
+  color: var(--label);
+}
+.wordmark-by {
+  font-family: var(--font); font-weight: 500; font-size: 11px; line-height: 1.1;
+  letter-spacing: 0.005em; color: var(--label-2); margin-top: 3px; white-space: nowrap;
+}
+
+/* Legacy nav atoms kept for safety; superseded by .wordmark. */
+.nav-mark { width: 32px; height: 32px; border-radius: var(--r-avatar); object-fit: contain; flex: none; display: block; }
+.nav-title { font-size: 17px; font-weight: 600; letter-spacing: -0.3px; color: var(--label); }
 .nav-sub { font-size: 12px; color: var(--label-2); letter-spacing: -0.1px; margin-top: 1px; }
 
 /* ===================== iOS Large Title ===================== */
 .large-title { padding: 10px 4px 14px; }
+/* The client-name title (e.g. "Eats on 601"). Defaults to SF for a native feel.
+   To let the brand show through, set --title-font to a serif (e.g. load Fraunces via
+   @font-face, then: :root { --title-font: "Fraunces", Georgia, serif; }). */
 .large-title h1 {
-  font-size: 34px; font-weight: 700; letter-spacing: -0.8px;
+  font-family: var(--title-font, var(--font));
+  font-size: 34px; font-weight: 700; letter-spacing: -0.4px;
   line-height: 1.06; margin: 0; color: var(--label);
 }
 .large-title .large-sub {
@@ -123,7 +214,7 @@ h1, h2, h3 { font-family: var(--font); margin: 0; }
   box-shadow: var(--shadow-card);
   margin-bottom: 16px;
 }
-.card h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 4px; }
+.card h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin-bottom: 4px; }
 
 /* ===================== Text helpers ===================== */
 .muted { color: var(--label-2); }
@@ -133,10 +224,10 @@ h1, h2, h3 { font-family: var(--font); margin: 0; }
 .spread { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .stack > * + * { margin-top: 12px; }
 
-/* iOS grouped-list section header */
+/* iOS grouped-list section header — 13px semibold, +0.5px tracking, uppercase */
 .section-label {
-  font-size: 13px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.03em;
-  color: var(--label-2); margin: 26px 6px 8px;
+  font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px;
+  color: var(--label-2); margin: 26px 16px 8px;
 }
 
 /* ===================== Forms ===================== */
@@ -147,14 +238,13 @@ label {
 input[type="text"], input[type="date"], input[type="password"], input[type="number"],
 input[type="email"], input[type="tel"], textarea, select {
   width: 100%; font-family: var(--font); font-size: 17px; color: var(--label);
-  background: var(--card); border: 0.5px solid var(--separator); border-radius: var(--r-field);
-  padding: 12px 13px; outline: none; letter-spacing: -0.2px;
+  background: var(--fill-input); border: none; border-radius: var(--r-input);
+  padding: 12px 16px; outline: none; letter-spacing: -0.2px;
   -webkit-appearance: none; appearance: none;
-  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition: box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
-input::placeholder, textarea::placeholder { color: var(--label-3); }
+input::placeholder, textarea::placeholder { color: var(--placeholder); }
 input:focus, textarea:focus, select:focus {
-  border-color: var(--blue);
   box-shadow: 0 0 0 4px var(--blue-fill);
 }
 textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
@@ -162,29 +252,36 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 /* ===================== Buttons ===================== */
 .btn {
   appearance: none; -webkit-appearance: none; font-family: var(--font);
-  font-weight: 600; font-size: 17px; letter-spacing: -0.3px;
-  border: none; background: var(--gray-fill); color: var(--blue);
-  border-radius: var(--r-control); padding: 12px 18px; cursor: pointer; min-height: 44px;
+  font-weight: 590; font-size: 17px; letter-spacing: -0.3px;
+  border: none; background: var(--fill-input); color: var(--blue);
+  border-radius: var(--r-button-sm); padding: 12px 18px; cursor: pointer; min-height: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   user-select: none; -webkit-user-select: none;
-  transition: transform 180ms var(--ease), background var(--dur-fast) var(--ease),
+  transition: transform 120ms var(--ease), background var(--dur-fast) var(--ease),
               filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 .btn:hover { background: var(--gray-fill-2); }
-.btn:active { transform: scale(0.97); opacity: 0.88; }
+.btn:active { transform: scale(0.97); opacity: 0.9; }
 .btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
 .btn.block { width: 100%; }
 
-/* Filled (prominent) — primary actions all use systemBlue per the accent rule */
-.btn.primary, .btn.send, .btn.go { background: var(--blue); color: var(--on-accent); }
-.btn.primary:hover, .btn.send:hover, .btn.go:hover { background: var(--blue); filter: brightness(1.04); }
-.btn.primary:active, .btn.send:active, .btn.go:active { filter: brightness(0.94); }
+/* Filled (prominent) — primary actions use systemBlue, capsule, ~50px high */
+.btn.primary, .btn.send, .btn.go {
+  background: var(--blue); color: var(--on-accent);
+  border-radius: var(--r-button); min-height: 50px; padding-left: 22px; padding-right: 22px;
+}
+.btn.primary:hover, .btn.send:hover, .btn.go:hover { background: var(--blue); filter: brightness(1.05); }
+.btn.primary:active, .btn.send:active, .btn.go:active { filter: brightness(0.92); }
 
-/* Secondary / plain */
+/* Secondary / plain (tinted) */
 .btn.ghost { background: transparent; color: var(--blue); }
-.btn.ghost:hover { background: var(--gray-fill); }
+.btn.ghost:hover { background: var(--fill-input); }
 
-.btn.sm { font-size: 15px; padding: 9px 14px; min-height: 44px; border-radius: 10px; }
+/* Destructive (delete) — tinted red */
+.btn.danger { background: var(--red-fill); color: var(--red); }
+.btn.danger:hover { background: var(--red-fill); filter: brightness(0.97); }
+
+.btn.sm { font-size: 15px; padding: 9px 15px; min-height: 44px; border-radius: var(--r-button-sm); }
 
 .btn:disabled, .btn[disabled] { opacity: 0.4; pointer-events: none; }
 
@@ -238,7 +335,8 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .toast {
   position: fixed; left: 50%; bottom: calc(28px + var(--safe-b));
   transform: translateX(-50%) translateY(10px);
-  background: rgba(28, 28, 30, 0.92); color: var(--on-accent);
+  background: var(--toast-bg); color: #ffffff;
+  -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
   padding: 12px 18px; border-radius: var(--r-pill); font-size: 15px; font-weight: 500;
   letter-spacing: -0.2px; box-shadow: var(--shadow-pop);
   opacity: 0; pointer-events: none; z-index: 80;
@@ -251,10 +349,48 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .hidden { display: none !important; }
 .tabular { font-variant-numeric: tabular-nums; }
 
+/* ===================== Full-image lightbox (tap a cropped image to see it whole) ===================== */
+.lightbox {
+  position: fixed; inset: 0; z-index: 100;
+  display: flex; align-items: center; justify-content: center;
+  padding: calc(20px + var(--safe-t)) 16px calc(20px + var(--safe-b));
+  background: rgba(0, 0, 0, 0.82);
+  -webkit-backdrop-filter: blur(20px) saturate(140%); backdrop-filter: blur(20px) saturate(140%);
+  opacity: 0; pointer-events: none;
+  transition: opacity var(--dur) var(--ease);
+}
+.lightbox.show { opacity: 1; pointer-events: auto; }
+.lightbox img {
+  max-width: 100%; max-height: 100%; object-fit: contain;
+  border-radius: 14px; display: block; box-shadow: var(--shadow-pop);
+  transform: scale(0.96); transition: transform var(--dur) var(--ease);
+}
+.lightbox.show img { transform: scale(1); }
+.lightbox-close {
+  position: absolute; top: calc(14px + var(--safe-t)); right: 14px;
+  width: 36px; height: 36px; border-radius: var(--r-pill); border: none;
+  background: rgba(120, 120, 128, 0.5); color: #fff; font-size: 19px; line-height: 1;
+  display: grid; place-items: center; cursor: pointer;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.lightbox-close:active { transform: scale(0.94); }
+/* any image wired as a lightbox trigger gets the zoom affordance */
+.zoomable { cursor: zoom-in; }
+
+/* ===================== Continuous (squircle) corners — progressive enhancement ===================== */
+@supports (corner-shape: superellipse(1.8)) {
+  .card, .btn, .chip, .badge, input, textarea, select, .thumb, .brandmark,
+  .draft, .notebox, .tabs, .tab, .seg, .seg-thumb, .lightbox img {
+    corner-shape: superellipse(1.8);
+  }
+}
+
 /* ===================== Reduced motion ===================== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-property: opacity, color, background-color, border-color, box-shadow, filter !important;
   }
-  .btn:active, .chip:active { transform: none !important; }
+  .btn:active, .chip:active, .seg-btn:active { transform: none !important; }
+  .seg-thumb { transition: none !important; }
+  .lightbox img { transform: none !important; }
 }

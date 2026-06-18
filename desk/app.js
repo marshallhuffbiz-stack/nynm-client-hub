@@ -1,6 +1,14 @@
-// NYNM Request Desk — Marshall's internal control panel for all client requests.
+// Relay Desk — Marshall's internal control panel for all client requests.
 // Plain ES module. Talks to the shared API client (mock locally, Apps Script in prod).
 import { deskApi } from "../shared/api.js";
+import { openLightbox, makeZoomable } from "../shared/lightbox.js";
+
+// Trash glyph for the per-request delete control (inline SVG, no icon font / emoji).
+const TRASH_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>' +
+  '<path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
 
 const adminToken = new URLSearchParams(location.search).get("k") || "";
 const api = deskApi(adminToken);
@@ -381,7 +389,8 @@ function requestCard(r) {
         el("span", { class: `badge ${sm.cls}` }, sm.label),
         el("span", { class: "req-when" }, relTime(r.createdAt))
       )
-    )
+    ),
+    deleteRequestButton(r)
   );
   card.append(head);
 
@@ -394,11 +403,13 @@ function requestCard(r) {
     if (atts.length) {
       card.append(
         el("div", { class: "req-thumbs" },
-          ...atts.map((a) =>
-            el("a", { class: "thumb", href: a.url, target: "_blank", rel: "noopener", title: a.name || "" },
-              el("img", { src: a.url, alt: a.name || "attachment", loading: "lazy" })
-            )
-          )
+          ...atts.map((a) => {
+            const full = driveEmbed(a.url, "w2000");
+            const link = el("a", { class: "thumb zoomable", href: full, target: "_blank", rel: "noopener", title: a.name || "" },
+              el("img", { src: driveEmbed(a.url, "w1200"), alt: a.name || "attachment", loading: "lazy" }));
+            link.addEventListener("click", (e) => { e.preventDefault(); openLightbox(full, a.name || "attachment"); });
+            return link;
+          })
         )
       );
     }
@@ -406,6 +417,32 @@ function requestCard(r) {
 
   card.append(actionArea(r));
   return card;
+}
+
+// Quiet destructive control in each request's header. Lets a test or accidental
+// submission be removed from the history. Admin-gated server-side; confirmed here.
+function deleteRequestButton(r) {
+  const btn = el("button", {
+    type: "button",
+    class: "req-del",
+    title: "Delete request",
+    "aria-label": "Delete request",
+    html: TRASH_SVG,
+  });
+  btn.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const label = r.title || typeLabel(r.type);
+    if (!window.confirm(`Delete this request (${label})? It is removed from the history and cannot be undone.`)) return;
+    const res = await call(() => api.remove(r.id));
+    if (res) {
+      const i = state.requests.findIndex((x) => x.id === r.id);
+      if (i >= 0) state.requests.splice(i, 1);
+      delete state.draftComments[r.id];
+      toast("Request deleted.");
+      render();
+    }
+  });
+  return btn;
 }
 
 // ---------- stage-dependent action area ----------
@@ -545,13 +582,14 @@ function doneActions(r) {
 }
 
 // Drive "view" URLs (.../d/FILEID/view) aren't embeddable in <img>; convert to
-// the thumbnail endpoint. Non-Drive URLs (local mock, direct links) pass through.
-function driveEmbed(url) {
+// the thumbnail endpoint. `size` lets the lightbox request a larger render than the
+// inline preview. Non-Drive URLs (local mock, direct links) pass through.
+function driveEmbed(url, size = "w1200") {
   if (!url) return url;
   if (/drive\.google\.com/.test(url)) {
     const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
     const id = m && (m[1] || m[2]);
-    if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=w1200`;
+    if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=${size}`;
   }
   return url;
 }
@@ -568,8 +606,10 @@ function readyActions(r) {
 
   const body = el("div", { class: "draft-body" });
   if (d.imageUrl) {
-    const img = el("img", { class: "draft-img", src: driveEmbed(d.imageUrl), alt: "draft preview", loading: "lazy" });
+    // Inline preview is cropped (cover); tap it to see the whole image (contain) in the lightbox.
+    const img = el("img", { class: "draft-img", src: driveEmbed(d.imageUrl, "w1200"), alt: "Staged draft", loading: "lazy" });
     img.addEventListener("error", () => { img.style.display = "none"; });
+    makeZoomable(img, driveEmbed(d.imageUrl, "w2000"));
     body.append(img);
   }
   if (d.caption) body.append(el("div", { class: "draft-caption" }, d.caption));
