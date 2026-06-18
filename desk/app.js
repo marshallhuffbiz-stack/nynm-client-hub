@@ -514,6 +514,18 @@ function doneActions(r) {
     el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode("Done")));
 }
 
+// Drive "view" URLs (.../d/FILEID/view) aren't embeddable in <img>; convert to
+// the thumbnail endpoint. Non-Drive URLs (local mock, direct links) pass through.
+function driveEmbed(url) {
+  if (!url) return url;
+  if (/drive\.google\.com/.test(url)) {
+    const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
+    const id = m && (m[1] || m[2]);
+    if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=w1200`;
+  }
+  return url;
+}
+
 function readyActions(r) {
   const wrap = el("div", { class: "act" });
   const d = r.draft || {};
@@ -525,7 +537,11 @@ function readyActions(r) {
   ));
 
   const body = el("div", { class: "draft-body" });
-  if (d.imageUrl) body.append(el("img", { class: "draft-img", src: d.imageUrl, alt: "draft preview", loading: "lazy" }));
+  if (d.imageUrl) {
+    const img = el("img", { class: "draft-img", src: driveEmbed(d.imageUrl), alt: "draft preview", loading: "lazy" });
+    img.addEventListener("error", () => { img.style.display = "none"; });
+    body.append(img);
+  }
   if (d.caption) body.append(el("div", { class: "draft-caption" }, d.caption));
 
   const kv = el("div", { class: "draft-meta" });
