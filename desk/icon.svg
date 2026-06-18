@@ -1,8 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="NYNM Request Desk">
-  <rect width="512" height="512" rx="96" fill="#38424b"/>
-  <rect x="40" y="40" width="432" height="432" rx="66" fill="none" stroke="#f4f1ea" stroke-width="10" stroke-opacity="0.45"/>
-  <text x="256" y="312" text-anchor="middle"
-        font-family="Archivo, Helvetica, Arial, sans-serif" font-weight="700"
-        font-size="220" letter-spacing="-8" fill="#f4f1ea">N</text>
-  <circle cx="256" cy="392" r="13" fill="#f4f1ea"/>
-</svg>

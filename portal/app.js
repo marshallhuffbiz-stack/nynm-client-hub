@@ -433,6 +433,7 @@ function applyData(data) {
   const client = (data && data.client) || {};
   const name = client.name || "Your business";
   clientNameEl.textContent = name;
+  document.querySelector(".large-title")?.classList.remove("hidden");
   document.title = `${name} · Relay`;
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
