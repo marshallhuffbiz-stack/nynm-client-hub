@@ -707,8 +707,7 @@ function seedPilotClients() {
 
   var seeds = [
     { clientId: "the-o", name: "The O", brandSlug: "the-o" },
-    { clientId: "eats-on-601", name: "Eats on 601", brandSlug: "eats-on-601" },
-    { clientId: "a-new-day", name: "A New Day", brandSlug: "" }
+    { clientId: "eats-on-601", name: "Eats on 601", brandSlug: "eats-on-601" }
   ];
 
   var clients = readAll_(SHEET_CLIENTS);
@@ -742,7 +741,7 @@ function seedPilotClients() {
   if (ui) {
     ui.alert(
       "Pilot clients ready",
-      "the-o, eats-on-601, and a-new-day are seeded and active.\n\n" +
+      "the-o and eats-on-601 are seeded and active.\n\n" +
       "Their portal link tokens are in the Clients tab (token column). " +
       "Build each portal URL as  ?c=<token>  (admin desk uses ?admin=<ADMIN_TOKEN>).",
       ui.ButtonSet.OK

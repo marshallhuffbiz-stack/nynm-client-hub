@@ -16,7 +16,6 @@ const store = {
   clients: [
     { clientId: "the-o", name: "The O", token: "dev-the-o", pin: "", brandSlug: "the-o", postizChannels: [], siteFolder: "", active: true, createdAt: iso(now), updatedAt: iso(now) },
     { clientId: "eats-on-601", name: "Eats on 601", token: "dev-eats", pin: "", brandSlug: "eats-on-601", postizChannels: [], siteFolder: "", active: true, createdAt: iso(now), updatedAt: iso(now) },
-    { clientId: "a-new-day", name: "A New Day", token: "dev-anewday", pin: "", brandSlug: "", postizChannels: [], siteFolder: "", active: true, createdAt: iso(now), updatedAt: iso(now) },
   ],
   requests: [
     {

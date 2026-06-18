@@ -344,7 +344,7 @@ async function submitRequest(event) {
     return;
   }
   if (uploadingCount > 0) {
-    toast("Hang on — photos are still uploading.");
+    toast("Hang on, photos are still uploading.");
     return;
   }
 
@@ -424,7 +424,7 @@ function applyData(data) {
   const client = (data && data.client) || {};
   const name = client.name || "Your business";
   clientNameEl.textContent = name;
-  document.title = `${name} — NYNM Portal`;
+  document.title = `${name} · NYNM Portal`;
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
 }

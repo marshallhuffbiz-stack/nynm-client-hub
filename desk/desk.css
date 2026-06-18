@@ -1,138 +1,123 @@
-/* NYNM Request Desk — desk-specific styles only.
-   Base tokens + .card/.btn/.badge/.chip/.thumb/.brandmark/.toast live in ../shared/ui.css. */
+/* NYNM Request Desk — desk-specific styles. iOS 17/18 language.
+   Base tokens + .card/.btn/.badge/.chip/.thumb/.brandmark/.toast/.appbar live in ../shared/ui.css.
+   Class names are preserved from the original markup so app.js keeps working. */
 
-/* --- Top tab switch --- */
+/* ===================== Requests / Events / Clients = iOS segmented control ===================== */
 .tabs {
   display: flex;
-  gap: 6px;
-  background: var(--bone);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 4px;
-  margin: 4px 0 18px;
-  position: sticky;
-  top: 64px;
-  z-index: 9;
+  gap: 0;
+  background: var(--gray-fill);
+  border-radius: 10px;
+  padding: 2px;
+  margin: 2px 0 22px;
 }
 .tab {
-  flex: 1;
-  appearance: none;
-  border: none;
-  background: transparent;
-  color: var(--slate);
-  font-family: var(--body);
-  font-weight: 600;
-  font-size: 14px;
-  padding: 9px 8px;
-  border-radius: 999px;
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: background .15s, color .15s;
+  flex: 1 1 0;
+  appearance: none; -webkit-appearance: none; border: none; background: transparent;
+  color: var(--label-2);
+  font-family: var(--font); font-weight: 500; font-size: 14px; letter-spacing: -0.2px;
+  padding: 6px 8px; min-height: 40px; border-radius: 8px; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
+              box-shadow var(--dur-fast) var(--ease);
 }
-.tab.active { background: var(--card); color: var(--ink); box-shadow: var(--shadow); }
+.tab:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
+.tab.active { color: var(--label); font-weight: 600; background: var(--card); box-shadow: var(--shadow-segment); }
 .tab-count {
-  font-size: 12px;
-  font-weight: 600;
-  min-width: 18px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--slate) 12%, transparent);
-  color: var(--slate);
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  min-width: 18px; padding: 1px 6px; border-radius: var(--r-pill);
+  background: var(--gray-fill-2); color: var(--label-2);
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
 }
-.tab.active .tab-count { background: color-mix(in srgb, var(--slate) 16%, transparent); }
+.tab.active .tab-count { background: var(--blue-fill); color: var(--blue); }
 .tab-count:empty { display: none; }
 
-/* --- Filters --- */
-.filters { margin-bottom: 6px; }
+/* ===================== Filters ===================== */
+.filters { margin-bottom: 14px; }
 .filters .row + .row { margin-top: 8px; }
-.chip.sm { font-size: 13px; padding: 6px 11px; }
 
-/* --- Request card --- */
-.req-head { display: flex; align-items: flex-start; gap: 10px; }
-.req-head .brandmark { font-size: 13px; width: 32px; height: 32px; }
+/* ===================== Request card ===================== */
+.req-head { display: flex; align-items: flex-start; gap: 12px; }
+.req-head .brandmark { width: 40px; height: 40px; font-size: 15px; }
 .req-headtext { flex: 1; min-width: 0; }
-.req-client { font-weight: 600; font-size: 14px; color: var(--ink); line-height: 1.2; }
-.req-when { color: var(--fog); font-size: 12px; }
-.req-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 3px; }
-.req-title { font-weight: 600; font-size: 15px; margin: 12px 0 4px; }
-.req-desc { color: var(--slate); font-size: 14px; white-space: pre-wrap; word-break: break-word; }
+.req-client { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); line-height: 1.22; }
+.req-when { color: var(--label-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+.req-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
+.req-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; margin: 14px 0 4px; }
+.req-desc { color: var(--label); font-size: 16px; letter-spacing: -0.2px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+.req-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
 
-.req-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-
-/* card that is collapsed/done reads quieter */
-.card.is-done { opacity: 0.72; }
+/* card that is done reads quieter */
+.card.is-done { opacity: 0.6; }
 .card.is-done .req-title { font-weight: 500; }
 
-/* --- Action area --- */
-.act { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+/* ===================== Action area ===================== */
+.act { margin-top: 16px; padding-top: 16px; border-top: 0.5px solid var(--separator); }
 .act label { margin-bottom: 6px; }
-.act .btn-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.act .btn-row { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
 .act .btn-row .btn { flex: 1 1 auto; }
 
 .statusline {
-  display: flex; align-items: center; gap: 8px;
-  color: var(--slate); font-size: 14px; font-weight: 500;
+  display: flex; align-items: center; gap: 9px;
+  color: var(--label-2); font-size: 15px; font-weight: 500; letter-spacing: -0.2px;
 }
-.statusline .dot {
-  width: 8px; height: 8px; border-radius: 999px; background: var(--send); flex: none;
-}
-.statusline.go .dot { background: var(--go); }
-.statusline .skill { color: var(--fog); font-weight: 400; }
+.statusline .dot { width: 8px; height: 8px; border-radius: var(--r-pill); background: var(--blue); flex: none; }
+.statusline.go .dot { background: var(--green); }
+.statusline .skill { color: var(--label-3); font-weight: 400; }
 
-/* dev helper */
-.dev-note { color: var(--fog); font-size: 12px; margin-top: 10px; }
-.btn.dev { color: var(--fog); border-style: dashed; }
+/* dev helper — quiet, never the focus */
+.dev-note { color: var(--label-3); font-size: 12px; margin-top: 10px; line-height: 1.35; }
+.btn.dev { color: var(--label-2); background: transparent; font-weight: 500; }
+.btn.dev:hover { background: var(--gray-fill); }
 
-/* change note callout */
+/* attention callout (changes asked / error) — iOS tinted inset, readable label text */
 .notebox {
-  background: var(--warn-bg); border: 1px solid color-mix(in srgb, var(--warn) 28%, var(--line));
-  color: var(--warn); border-radius: var(--radius-sm); padding: 9px 11px; font-size: 13px; margin-top: 10px;
+  background: var(--orange-fill); color: var(--label);
+  border-radius: var(--r-control); padding: 10px 13px; font-size: 14px; letter-spacing: -0.2px;
+  margin-top: 12px; line-height: 1.4;
 }
-.notebox strong { font-weight: 600; }
+.notebox strong { font-weight: 600; color: var(--orange); }
 
-/* --- Draft sub-panel (ready stage) --- */
+/* ===================== Staged-draft review (recessed inset, not a nested card) ===================== */
 .draft {
-  margin-top: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--bone) 40%, var(--card)); overflow: hidden;
+  margin-top: 16px; border-radius: var(--r-control);
+  background: var(--bg); overflow: hidden;
 }
 .draft-head {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 9px 12px; border-bottom: 1px solid var(--line);
-  font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fog); font-weight: 600;
+  padding: 11px 14px; border-bottom: 0.5px solid var(--separator);
+  font-size: 13px; color: var(--label-2); font-weight: 600; letter-spacing: -0.1px;
 }
-.draft-body { padding: 12px; }
+.draft-body { padding: 14px; }
 .draft-body img.draft-img {
   width: 100%; max-height: 280px; object-fit: cover;
-  border-radius: 9px; border: 1px solid var(--line); margin-bottom: 10px; display: block;
+  border-radius: var(--r-control); margin-bottom: 12px; display: block;
 }
-.draft-caption { font-size: 14px; color: var(--ink); white-space: pre-wrap; word-break: break-word; }
-.draft-meta { margin-top: 10px; display: grid; gap: 4px; }
-.draft-meta .kv { font-size: 13px; color: var(--slate); }
-.draft-meta .kv b { color: var(--fog); font-weight: 600; }
-.draft-summary { margin-top: 8px; color: var(--fog); font-size: 12px; }
+.draft-caption { font-size: 16px; color: var(--label); white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
+.draft-meta { margin-top: 12px; display: grid; gap: 5px; }
+.draft-meta .kv { font-size: 14px; color: var(--label); letter-spacing: -0.2px; }
+.draft-meta .kv b { color: var(--label-2); font-weight: 400; }
+.draft-summary { margin-top: 10px; color: var(--label-2); font-size: 13px; line-height: 1.4; }
 
-/* --- Events --- */
+/* ===================== Events ===================== */
 .evt-date {
   display: inline-flex; align-items: baseline; gap: 6px;
-  color: var(--slate); font-weight: 600; font-size: 14px;
+  color: var(--label-2); font-weight: 500; font-size: 15px; letter-spacing: -0.2px;
+  font-variant-numeric: tabular-nums;
 }
-.evt-date .yr { color: var(--fog); font-weight: 400; font-size: 13px; }
+.evt-date .yr { color: var(--label-3); font-weight: 400; font-size: 13px; }
 
-/* --- Clients --- */
-.client-id { font-family: var(--head); font-size: 13px; color: var(--fog); }
-.linkrow {
-  display: flex; gap: 8px; margin-top: 10px; align-items: stretch;
-}
+/* ===================== Clients ===================== */
+.client-id { font-size: 13px; color: var(--label-2); font-variant-numeric: tabular-nums; letter-spacing: -0.1px; }
+.linkrow { display: flex; gap: 8px; margin-top: 12px; align-items: stretch; }
 .linkrow input {
-  flex: 1; min-width: 0; font-size: 13px; font-family: var(--head);
-  color: var(--slate); background: var(--bone); border-color: var(--line);
+  flex: 1; min-width: 0; font-size: 13px;
+  color: var(--label-2); background: var(--bg); border-color: transparent;
 }
 .linkrow .btn { flex: none; }
 
-/* --- misc --- */
-code { font-family: var(--head); font-size: 0.92em; background: var(--bone); padding: 1px 5px; border-radius: 5px; }
-.appbar h1 { font-size: 19px; }
-.appbar .sub { color: var(--fog); font-size: 13px; }
+/* ===================== Misc ===================== */
+code {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em;
+  background: var(--gray-fill); padding: 1px 6px; border-radius: 6px; color: var(--label);
+}

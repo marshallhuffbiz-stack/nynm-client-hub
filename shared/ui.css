@@ -1,118 +1,260 @@
-/* NYNM Client Hub — shared design tokens + base components.
-   Clarity-first: paper / ink / slate / fog / bone. Archivo headings, Inter body. */
-@import url("https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Inter:wght@400;500;600&display=swap");
+/* NYNM Client Hub — shared design system.
+   Direction: iOS 17/18 (Apple Human Interface Guidelines). San Francisco served by the OS,
+   Apple light-mode system colors, grouped-inset layout, one systemBlue interaction accent.
+   See DESIGN-BRIEF.md — that brief is law. DOM class names are preserved from the original
+   markup so app.js keeps working; only the visual layer changed. */
 
 :root {
-  --paper: #f4f1ea;
-  --card: #fffefb;
-  --ink: #1b1a18;
-  --slate: #38424b;
-  --fog: #7c776e;
-  --bone: #ece6da;
-  --line: #e3ddd2;
-  --send: #2d5b86;
-  --send-bg: #e9f0f7;
-  --go: #2f6f4f;
-  --go-bg: #e7f1ea;
-  --warn: #8a5a12;
-  --warn-bg: #f6edda;
-  --radius: 14px;
-  --radius-sm: 10px;
-  --shadow: 0 1px 2px rgba(27, 26, 24, 0.05), 0 6px 20px rgba(27, 26, 24, 0.05);
-  --head: "Archivo", system-ui, -apple-system, sans-serif;
-  --body: "Inter", system-ui, -apple-system, sans-serif;
+  /* Type — San Francisco, served by the OS (no web font, by design) */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+
+  /* Apple light-mode system colors */
+  --bg: #f2f2f7;                    /* systemGroupedBackground — the field behind cards */
+  --card: #ffffff;                  /* secondarySystemGroupedBackground — cards / rows */
+  --label: #1c1c1e;                 /* label — primary text */
+  --label-2: rgba(60, 60, 67, 0.6); /* secondaryLabel */
+  --label-3: rgba(60, 60, 67, 0.3); /* tertiaryLabel — placeholder / faint */
+  --separator: rgba(60, 60, 67, 0.29); /* separator — hairlines, rendered 0.5px */
+  --blue: #007aff;                  /* systemBlue — the one interaction accent */
+  --green: #34c759;                 /* systemGreen — status only */
+  --orange: #ff9500;                /* systemOrange — status only */
+  --red: #ff3b30;                   /* systemRed — status only */
+  --gray: #8e8e93;                  /* systemGray */
+  --gray3: #c7c7cc;
+  --gray5: #e5e5ea;
+  --gray6: #f2f2f7;
+  --on-accent: #ffffff;             /* glyph/text on a filled accent control */
+
+  /* Tinted fills — accent text on the same accent @ 12–16% (Apple convention) */
+  --blue-fill: rgba(0, 122, 255, 0.12);
+  --green-fill: rgba(52, 199, 89, 0.16);
+  --orange-fill: rgba(255, 149, 0, 0.16);
+  --red-fill: rgba(255, 59, 48, 0.12);
+  --gray-fill: rgba(118, 118, 128, 0.12);  /* tertiarySystemFill */
+  --gray-fill-2: rgba(118, 118, 128, 0.2); /* hover / pressed neutral */
+
+  /* Radii — continuous-corner feel */
+  --r-card: 18px;
+  --r-control: 12px;
+  --r-field: 12px;
+  --r-avatar: 22.5%;   /* iOS app-icon squircle approximation */
+  --r-pill: 980px;
+
+  /* Elevation — one soft, low shadow */
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.03), 0 5px 18px rgba(0, 0, 0, 0.045);
+  --shadow-pop: 0 8px 30px rgba(0, 0, 0, 0.16);
+  --shadow-segment: 0 3px 8px rgba(0, 0, 0, 0.12), 0 1px 1px rgba(0, 0, 0, 0.04);
+
+  /* Motion — Apple curves */
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);   /* confident ease-out (apple.com) */
+  --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --dur-fast: 200ms;
+  --dur: 350ms;
+
+  /* Layout */
+  --nav-h: 50px;
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
 }
 
 * { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  background: var(--paper);
-  color: var(--ink);
-  font-family: var(--body);
-  font-size: 16px;
-  line-height: 1.5;
+  background: var(--bg);
+  color: var(--label);
+  font-family: var(--font);
+  font-size: 17px;            /* iOS Body */
+  line-height: 1.43;
+  letter-spacing: -0.2px;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-h1, h2, h3 { font-family: var(--head); font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+/* Centered content column, iOS 16px side gutters */
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px calc(96px + var(--safe-b));
+}
 
-.wrap { max-width: 720px; margin: 0 auto; padding: 16px 16px 96px; }
-
+/* ===================== Nav bar (the one vibrancy material) ===================== */
 .appbar {
-  position: sticky; top: 0; z-index: 10;
-  background: color-mix(in srgb, var(--paper) 88%, transparent);
-  backdrop-filter: saturate(1.2) blur(8px);
-  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 20;
+  background: rgba(255, 255, 255, 0.72);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+  backdrop-filter: saturate(180%) blur(20px);
+  border-bottom: 0.5px solid var(--separator);
+  padding-top: var(--safe-t);
 }
-.appbar .wrap { padding-top: 14px; padding-bottom: 14px; display: flex; align-items: center; gap: 12px; }
-.appbar h1 { font-size: 19px; }
-.appbar .sub { color: var(--fog); font-size: 13px; }
-.brandmark { width: 34px; height: 34px; border-radius: 9px; background: var(--slate); color: #fff;
-  display: grid; place-items: center; font-family: var(--head); font-weight: 700; font-size: 15px; flex: none; }
+.appbar .wrap {
+  min-height: var(--nav-h);
+  padding-top: 9px; padding-bottom: 9px;
+  display: flex; align-items: center; gap: 10px;
+}
+.nav-mark {
+  width: 32px; height: 32px; border-radius: var(--r-avatar);
+  object-fit: contain; flex: none; display: block;
+}
+.nav-title {
+  font-size: 17px; font-weight: 600; letter-spacing: -0.3px; color: var(--label);
+}
+.nav-sub { font-size: 12px; color: var(--label-2); letter-spacing: -0.1px; margin-top: 1px; }
 
-.card {
-  background: var(--card); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 16px; box-shadow: var(--shadow); margin-bottom: 14px;
+/* ===================== iOS Large Title ===================== */
+.large-title { padding: 10px 4px 14px; }
+.large-title h1 {
+  font-size: 34px; font-weight: 700; letter-spacing: -0.8px;
+  line-height: 1.06; margin: 0; color: var(--label);
 }
-.card h2 { font-size: 16px; margin-bottom: 4px; }
-.muted { color: var(--fog); }
+.large-title .large-sub {
+  margin: 4px 0 0; color: var(--label-2);
+  font-size: 15px; letter-spacing: -0.2px;
+}
+
+h1, h2, h3 { font-family: var(--font); margin: 0; }
+
+/* ===================== Cards — grouped inset ===================== */
+.card {
+  background: var(--card);
+  border-radius: var(--r-card);
+  padding: 16px;
+  box-shadow: var(--shadow-card);
+  margin-bottom: 16px;
+}
+.card h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.3px; margin-bottom: 4px; }
+
+/* ===================== Text helpers ===================== */
+.muted { color: var(--label-2); }
 .small { font-size: 13px; }
 .row { display: flex; align-items: center; gap: 10px; }
 .row.wrap-row { flex-wrap: wrap; }
 .spread { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.stack > * + * { margin-top: 10px; }
-.section-label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--fog); margin: 22px 2px 8px; font-weight: 600; }
+.stack > * + * { margin-top: 12px; }
 
-label { font-size: 13px; color: var(--slate); font-weight: 500; display: block; margin-bottom: 5px; }
-input[type="text"], input[type="date"], input[type="password"], textarea, select {
-  width: 100%; font-family: var(--body); font-size: 15px; color: var(--ink);
-  background: #fff; border: 1px solid var(--line); border-radius: var(--radius-sm);
-  padding: 11px 12px; outline: none;
+/* iOS grouped-list section header */
+.section-label {
+  font-size: 13px; font-weight: 400; text-transform: uppercase; letter-spacing: 0.03em;
+  color: var(--label-2); margin: 26px 6px 8px;
 }
-input:focus, textarea:focus, select:focus { border-color: var(--slate); box-shadow: 0 0 0 3px rgba(56,66,75,0.12); }
-textarea { min-height: 92px; resize: vertical; }
 
+/* ===================== Forms ===================== */
+label {
+  font-size: 13px; color: var(--label-2); font-weight: 400;
+  display: block; margin-bottom: 6px; letter-spacing: -0.1px;
+}
+input[type="text"], input[type="date"], input[type="password"], input[type="number"],
+input[type="email"], input[type="tel"], textarea, select {
+  width: 100%; font-family: var(--font); font-size: 17px; color: var(--label);
+  background: var(--card); border: 0.5px solid var(--separator); border-radius: var(--r-field);
+  padding: 12px 13px; outline: none; letter-spacing: -0.2px;
+  -webkit-appearance: none; appearance: none;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+input::placeholder, textarea::placeholder { color: var(--label-3); }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 4px var(--blue-fill);
+}
+textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
+
+/* ===================== Buttons ===================== */
 .btn {
-  appearance: none; font-family: var(--body); font-weight: 600; font-size: 15px;
-  border: 1px solid var(--line); background: #fff; color: var(--ink);
-  border-radius: var(--radius-sm); padding: 11px 16px; cursor: pointer; transition: transform .04s, background .15s;
+  appearance: none; -webkit-appearance: none; font-family: var(--font);
+  font-weight: 600; font-size: 17px; letter-spacing: -0.3px;
+  border: none; background: var(--gray-fill); color: var(--blue);
+  border-radius: var(--r-control); padding: 12px 18px; cursor: pointer; min-height: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  user-select: none; -webkit-user-select: none;
+  transition: transform 180ms var(--ease), background var(--dur-fast) var(--ease),
+              filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
-.btn:hover { background: #faf7f0; }
-.btn:active { transform: scale(0.985); }
+.btn:hover { background: var(--gray-fill-2); }
+.btn:active { transform: scale(0.97); opacity: 0.88; }
+.btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
 .btn.block { width: 100%; }
-.btn.primary { background: var(--slate); color: #fff; border-color: var(--slate); }
-.btn.primary:hover { background: #2e373f; }
-.btn.send { background: var(--send); color: #fff; border-color: var(--send); }
-.btn.send:hover { filter: brightness(1.05); }
-.btn.go { background: var(--go); color: #fff; border-color: var(--go); }
-.btn.go:hover { filter: brightness(1.05); }
-.btn.ghost { background: transparent; }
-.btn.sm { padding: 7px 11px; font-size: 13px; }
 
+/* Filled (prominent) — primary actions all use systemBlue per the accent rule */
+.btn.primary, .btn.send, .btn.go { background: var(--blue); color: var(--on-accent); }
+.btn.primary:hover, .btn.send:hover, .btn.go:hover { background: var(--blue); filter: brightness(1.04); }
+.btn.primary:active, .btn.send:active, .btn.go:active { filter: brightness(0.94); }
+
+/* Secondary / plain */
+.btn.ghost { background: transparent; color: var(--blue); }
+.btn.ghost:hover { background: var(--gray-fill); }
+
+.btn.sm { font-size: 15px; padding: 9px 14px; min-height: 44px; border-radius: 10px; }
+
+.btn:disabled, .btn[disabled] { opacity: 0.4; pointer-events: none; }
+
+/* ===================== Chips ===================== */
 .chip {
-  font-size: 14px; font-weight: 500; padding: 8px 14px; border-radius: 999px;
-  border: 1px solid var(--line); background: #fff; color: var(--slate); cursor: pointer; user-select: none;
+  font-size: 15px; font-weight: 500; letter-spacing: -0.2px;
+  padding: 9px 15px; border-radius: var(--r-pill); min-height: 40px;
+  border: none; background: var(--gray-fill); color: var(--label); cursor: pointer;
+  user-select: none; -webkit-user-select: none;
+  display: inline-flex; align-items: center; gap: 6px;
+  transition: transform 180ms var(--ease), background var(--dur-fast) var(--ease),
+              color var(--dur-fast) var(--ease);
 }
-.chip.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.chip:hover { background: var(--gray-fill-2); }
+.chip:active { transform: scale(0.96); }
+.chip:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
+.chip.active { background: var(--blue-fill); color: var(--blue); font-weight: 600; }
+.chip.sm { font-size: 14px; padding: 8px 13px; min-height: 38px; }
 
-.badge { font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 999px; display: inline-block; }
-.badge.bone { background: var(--bone); color: var(--slate); }
-.badge.send { background: var(--send-bg); color: var(--send); }
-.badge.go { background: var(--go-bg); color: var(--go); }
-.badge.warn { background: var(--warn-bg); color: var(--warn); }
+/* ===================== Badges — tinted fills (status) ===================== */
+.badge {
+  font-size: 13px; font-weight: 600; letter-spacing: -0.1px;
+  padding: 3px 9px; border-radius: var(--r-pill); display: inline-flex; align-items: center;
+  white-space: nowrap;
+}
+.badge.bone { background: var(--gray-fill); color: var(--label-2); }  /* neutral / new */
+.badge.send { background: var(--blue-fill); color: var(--blue); }      /* in-progress */
+.badge.go   { background: var(--green-fill); color: var(--green); }    /* approved / done */
+.badge.warn { background: var(--orange-fill); color: var(--orange); }  /* ready / changes */
+.badge.err  { background: var(--red-fill); color: var(--red); }        /* error */
 
-.thumb { width: 52px; height: 52px; border-radius: 9px; background: var(--bone); border: 1px solid var(--line);
-  display: grid; place-items: center; color: var(--fog); overflow: hidden; flex: none; }
+/* ===================== Brand avatar (logo or monogram) ===================== */
+.brandmark {
+  width: 44px; height: 44px; border-radius: var(--r-avatar);
+  background: var(--card); border: 0.5px solid var(--separator);
+  display: grid; place-items: center; overflow: hidden; flex: none;
+  font-weight: 600; font-size: 17px; color: var(--label); letter-spacing: -0.3px;
+}
+.brandmark img { width: 100%; height: 100%; object-fit: contain; padding: 5px; display: block; }
+.brandmark.mono { background: var(--gray-fill); border-color: transparent; color: var(--label-2); }
+
+/* ===================== Photo thumbnails ===================== */
+.thumb {
+  width: 56px; height: 56px; border-radius: 13px; background: var(--gray6);
+  border: 0.5px solid var(--separator);
+  display: grid; place-items: center; color: var(--label-3); overflow: hidden; flex: none;
+}
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 
+/* ===================== Toast ===================== */
 .toast {
-  position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%);
-  background: var(--ink); color: #fff; padding: 11px 16px; border-radius: 999px; font-size: 14px;
-  box-shadow: var(--shadow); opacity: 0; pointer-events: none; transition: opacity .2s; z-index: 50;
+  position: fixed; left: 50%; bottom: calc(28px + var(--safe-b));
+  transform: translateX(-50%) translateY(10px);
+  background: rgba(28, 28, 30, 0.92); color: var(--on-accent);
+  padding: 12px 18px; border-radius: var(--r-pill); font-size: 15px; font-weight: 500;
+  letter-spacing: -0.2px; box-shadow: var(--shadow-pop);
+  opacity: 0; pointer-events: none; z-index: 80;
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
-.toast.show { opacity: 1; }
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-.empty { text-align: center; color: var(--fog); padding: 28px 12px; }
+/* ===================== Misc ===================== */
+.empty { text-align: center; color: var(--label-2); padding: 44px 16px; font-size: 15px; }
 .hidden { display: none !important; }
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* ===================== Reduced motion ===================== */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-property: opacity, color, background-color, border-color, box-shadow, filter !important;
+  }
+  .btn:active, .chip:active { transform: none !important; }
+}

@@ -8,7 +8,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="Desk" />
-  <meta name="theme-color" content="#38424b" />
+  <meta name="theme-color" content="#f2f2f7" />
 
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="./icon.svg" type="image/svg+xml" />
@@ -18,18 +18,21 @@
   <link rel="stylesheet" href="./desk.css" />
 </head>
 <body>
-  <!-- App bar -->
+  <!-- Nav bar -->
   <header class="appbar">
     <div class="wrap">
-      <div class="brandmark">N</div>
-      <div>
-        <h1>Request Desk</h1>
-        <div class="sub">Every client request, one queue</div>
-      </div>
+      <img class="nav-mark" src="../shared/brands/nynm-mark.png" alt="Not Your Normal Marketing" />
+      <div class="nav-title">Request Desk</div>
     </div>
   </header>
 
   <main class="wrap">
+    <!-- iOS large title -->
+    <div class="large-title">
+      <h1>Request Desk</h1>
+      <p class="large-sub">Every client request, one queue</p>
+    </div>
+
     <!-- Loading state -->
     <div id="view-loading" class="card">
       <div class="muted">Loading the desk…</div>
