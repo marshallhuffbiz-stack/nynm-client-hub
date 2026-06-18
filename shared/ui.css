@@ -191,7 +191,11 @@ body {
 
 /* ===================== iOS Large Title ===================== */
 .large-title { padding: 10px 4px 14px; }
+/* The client-name title (e.g. "Eats on 601"). Defaults to SF for a native feel.
+   To let the brand show through, set --title-font to a serif (e.g. load Fraunces via
+   @font-face, then: :root { --title-font: "Fraunces", Georgia, serif; }). */
 .large-title h1 {
+  font-family: var(--title-font, var(--font));
   font-size: 34px; font-weight: 700; letter-spacing: -0.4px;
   line-height: 1.06; margin: 0; color: var(--label);
 }
