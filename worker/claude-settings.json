@@ -1,27 +1,18 @@
 {
   "permissions": {
+    "defaultMode": "acceptEdits",
     "allow": [
-      "Read",
-      "Write",
-      "Edit",
-      "Glob",
-      "Grep",
-      "Skill",
-      "Bash(node:*)",
-      "Bash(mkdir:*)",
-      "Bash(cp:*)",
-      "Bash(ls:*)",
-      "Bash(cat:*)"
+      "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite", "WebSearch", "WebFetch", "Agent", "ToolSearch",
+      "Skill(branded-social-post)", "Skill(branded-collateral)", "Skill(imagery)", "Skill(chatgpt-image)", "Skill(image2)", "Skill(retouch)",
+      "Bash(node:*)", "Bash(npx:*)", "Bash(playwright-cli:*)", "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(ls:*)",
+      "Bash(cat:*)", "Bash(chmod:*)", "Bash(which:*)", "Bash(echo:*)", "Bash(python3:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(sips:*)", "Bash(ffmpeg:*)",
+      "mcp__codex__*", "mcp__visualize__*"
     ],
     "deny": [
-      "Bash(rm -rf:*)",
-      "Bash(sudo:*)",
-      "Bash(git push:*)",
-      "Bash(curl:* script.google.com*)",
-      "Bash(shutdown:*)",
-      "Bash(launchctl:*)",
-      "Bash(osascript:*)"
+      "Bash(curl:*)", "Bash(wget:*)", "Bash(postiz:*)", "Bash(git:*)", "Bash(gh:*)", "Bash(launchctl:*)",
+      "Bash(security:*)", "Bash(sudo:*)", "Bash(rm:*)", "Bash(open:*)", "Bash(osascript:*)",
+      "Skill(post)", "Skill(publish-product)"
     ]
   },
-  "_comment": "Drain runs unattended. It may read/write project files, run node (for wb.mjs) and skills, but not deploy, push, escalate, or touch the OS. Tighten or loosen per your comfort."
+  "_comment": "Drain stages drafts only. branded-social-post/imagery/etc. allowed; outward/destructive (post, publish, git, curl, postiz, launchctl) denied. Shipping (Skill(post)) is a separate approved step."
 }

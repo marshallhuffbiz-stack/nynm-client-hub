@@ -1,0 +1,36 @@
+{
+  "drafts": [
+    {
+      "id": "req_mqiwo71u_997b5b84",
+      "clientId": "eats-on-601",
+      "type": "post",
+      "title": "Steam cheeseburgers will be on the lot",
+      "description": "Steam cheeseburgers will be on the lot tomorrow from three to seven p.m.",
+      "attachments": [],
+      "eventId": "",
+      "stage": "queued",
+      "comment": "",
+      "scheduledFor": "",
+      "draft": null,
+      "changeNote": "",
+      "createdAt": "2026-06-18T02:53:38.610Z",
+      "updatedAt": "2026-06-18T02:54:33.938Z",
+      "meta": {
+        "activity": [
+          {
+            "at": "2026-06-18T02:53:38.610Z",
+            "kind": "created",
+            "text": "submitted via portal"
+          },
+          {
+            "at": "2026-06-18T02:54:33.937Z",
+            "kind": "send",
+            "text": "send"
+          }
+        ]
+      }
+    }
+  ],
+  "ships": [],
+  "at": "2026-06-18T03:01:26.438Z"
+}
