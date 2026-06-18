@@ -84,6 +84,36 @@ function initials(name = "") {
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
 
+// Clients hidden from the hub (not signed yet). Keeps them out of the queue,
+// filters, events, and client list without touching live data.
+const HIDDEN_CLIENTS = new Set(["a-new-day"]);
+
+// Brand logo art bundled in the repo (shared/brands/<slug>.png). Keyed by brandSlug
+// first, then clientId. Anything not listed falls back to a clean SF monogram.
+const BRAND_LOGOS = {
+  "the-o": "../shared/brands/the-o.png",
+  "eats-on-601": "../shared/brands/eats-on-601.png",
+};
+function brandLogoSrc(client, clientId) {
+  return (client && (BRAND_LOGOS[client.brandSlug] || BRAND_LOGOS[client.clientId])) ||
+    BRAND_LOGOS[clientId] || "";
+}
+
+// An Apple-style squircle avatar: the brand's own logo when we have it, else a
+// monogram of the client's initials on a tinted fill.
+function brandAvatar(client, clientId) {
+  const name = (client && client.name) || clientId || "";
+  const src = brandLogoSrc(client, clientId);
+  if (src) {
+    const mark = el("div", { class: "brandmark" });
+    const img = el("img", { src, alt: name, loading: "lazy" });
+    img.addEventListener("error", () => { mark.classList.add("mono"); mark.textContent = initials(name); });
+    mark.append(img);
+    return mark;
+  }
+  return el("div", { class: "brandmark mono" }, initials(name));
+}
+
 const TYPE_LABEL = { post: "Post", website: "Website", design: "Design", "event-promo": "Event promo" };
 function typeLabel(t) { return TYPE_LABEL[t] || t || "Request"; }
 
@@ -99,7 +129,7 @@ const STAGE_META = {
   done: { label: "Done", cls: "go" },
   error: { label: "Needs attention", cls: "warn" },
 };
-function stageMeta(s) { return STAGE_META[s] || { label: s || "—", cls: "bone" }; }
+function stageMeta(s) { return STAGE_META[s] || { label: s || "·", cls: "bone" }; }
 
 // Filter buckets: which stages each chip covers.
 const STAGE_FILTERS = [
@@ -175,9 +205,9 @@ async function loadInitial() {
 }
 
 function ingest(res) {
-  state.clients = Array.isArray(res.clients) ? res.clients : [];
-  state.requests = Array.isArray(res.requests) ? res.requests : [];
-  state.events = Array.isArray(res.events) ? res.events : [];
+  state.clients = (Array.isArray(res.clients) ? res.clients : []).filter((c) => !HIDDEN_CLIENTS.has(c.clientId));
+  state.requests = (Array.isArray(res.requests) ? res.requests : []).filter((r) => !HIDDEN_CLIENTS.has(r.clientId));
+  state.events = (Array.isArray(res.events) ? res.events : []).filter((e) => !HIDDEN_CLIENTS.has(e.clientId));
   state.clientById = {};
   for (const c of state.clients) state.clientById[c.clientId] = c;
 }
@@ -343,7 +373,7 @@ function requestCard(r) {
 
   // header
   const head = el("div", { class: "req-head" },
-    el("div", { class: "brandmark" }, initials(cl.name || r.clientId)),
+    brandAvatar(cl, r.clientId),
     el("div", { class: "req-headtext" },
       el("div", { class: "req-client" }, clientName(r.clientId)),
       el("div", { class: "req-badges" },
@@ -399,7 +429,7 @@ function commentActions(r) {
   }
 
   const initial = r.id in state.draftComments ? state.draftComments[r.id] : (r.comment || "");
-  const ta = el("textarea", { id: `cmt-${r.id}`, placeholder: "Anything Claude should know — tone, channel, must-haves, what to avoid." });
+  const ta = el("textarea", { id: `cmt-${r.id}`, placeholder: "Anything Claude should know: tone, channel, must-haves, what to avoid." });
   ta.value = initial;
   ta.addEventListener("focus", () => { typingActive = true; });
   ta.addEventListener("input", () => { state.draftComments[r.id] = ta.value; });
@@ -426,7 +456,7 @@ function commentActions(r) {
   const devBtn = el("button", { type: "button", class: "btn ghost sm dev" }, "▸ Simulate draft (dev)");
   devBtn.addEventListener("click", () => simulateDraft(r, ta.value));
   wrap.append(devBtn);
-  wrap.append(el("div", { class: "dev-note" }, "Dev stand-in — the real worker stages the draft. This fakes it so the review loop can be tried out."));
+  wrap.append(el("div", { class: "dev-note" }, "Dev stand-in: the real worker stages the draft. This fakes it so the review loop can be tried out."));
 
   return wrap;
 }
@@ -449,7 +479,7 @@ async function simulateDraft(r, comment) {
       draft: {
         caption: `Sample staged caption for "${r.title || typeLabel(r.type)}".`,
         preview: `Staged ${typeLabel(r.type).toLowerCase()} draft (simulated).`,
-        summary: "Simulated by dev button — the real worker stages this.",
+        summary: "Simulated by dev button: the real worker stages this.",
         channel: "Facebook + Instagram",
       },
       scheduledFor: "",
@@ -483,14 +513,14 @@ function buildingStatus(r) {
   return el("div", { class: "act" },
     el("div", { class: "statusline" },
       el("span", { class: "dot" }),
-      document.createTextNode("Sent to Claude — building the draft…"),
+      document.createTextNode("Sent to Claude, building the draft…"),
       skill ? el("span", { class: "skill" }, `· ${skill}`) : false
     )
   );
 }
 
 function shippingStatus(r) {
-  const txt = r.stage === "approved" ? "Approved — publishing…" : "Publishing…";
+  const txt = r.stage === "approved" ? "Approved, publishing…" : "Publishing…";
   return el("div", { class: "act" },
     el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode(txt))
   );
@@ -594,7 +624,7 @@ function eventCard(e) {
   const card = el("div", { class: "card" });
 
   card.append(el("div", { class: "req-head" },
-    el("div", { class: "brandmark" }, initials(clientName(e.clientId))),
+    brandAvatar(state.clientById[e.clientId], e.clientId),
     el("div", { class: "req-headtext" },
       el("div", { class: "req-client" }, clientName(e.clientId)),
       el("div", { class: "evt-date" }, d.main, el("span", { class: "yr" }, d.yr))
@@ -643,7 +673,7 @@ function clientCard(c) {
 
   card.append(el("div", { class: "spread" },
     el("div", { class: "row" },
-      el("div", { class: "brandmark" }, initials(c.name || c.clientId)),
+      brandAvatar(c, c.clientId),
       el("div", {},
         el("div", { class: "req-client" }, c.name || c.clientId),
         el("div", { class: "client-id" }, c.clientId)
