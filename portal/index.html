@@ -114,9 +114,15 @@
             <label for="evt-title">Event name</label>
             <input id="evt-title" type="text" placeholder="e.g. Friday sidewalk sale" />
           </div>
-          <div>
-            <label for="evt-date">Date</label>
-            <input id="evt-date" type="date" />
+          <div class="row" style="gap:12px; align-items:flex-start">
+            <div style="flex:1; min-width:0">
+              <label for="evt-date">Date</label>
+              <input id="evt-date" type="date" />
+            </div>
+            <div style="flex:1; min-width:0">
+              <label for="evt-time">Start time <span class="muted">(optional)</span></label>
+              <input id="evt-time" type="time" />
+            </div>
           </div>
           <div>
             <label for="evt-desc">Details <span class="muted">(optional)</span></label>

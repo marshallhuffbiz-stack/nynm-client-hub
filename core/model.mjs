@@ -86,8 +86,10 @@ export function validateEventInput(input) {
   if (!title) errors.push("title required");
   const date = String(input.date || "").trim();
   if (!isIsoDate(date)) errors.push("date must be YYYY-MM-DD");
+  const time = String(input.time || "").trim(); // optional start time, "HH:MM" 24-hour
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) errors.push("time must be HH:MM (24-hour)");
   if (errors.length) return { ok: false, errors };
-  return { ok: true, errors: [], value: { clientId, title, date, description: String(input.description || "").trim() } };
+  return { ok: true, errors: [], value: { clientId, title, date, time, description: String(input.description || "").trim() } };
 }
 
 // Which skill the worker drain should reach for, given the request type + text.

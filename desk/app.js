@@ -85,6 +85,14 @@ function fmtSchedule(iso) {
   });
 }
 
+// "19:30" -> "7:30 PM" (locale-friendly). Empty/invalid -> "".
+function fmtTime(t) {
+  if (!t || !/^\d{1,2}:\d{2}$/.test(String(t))) return "";
+  const [h, m] = String(t).split(":").map(Number);
+  if (h > 23 || m > 59) return "";
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function initials(name = "") {
   const parts = String(name).trim().split(/\s+/).filter(Boolean);
   if (!parts.length) return "?";
@@ -667,7 +675,7 @@ function eventCard(e) {
     brandAvatar(state.clientById[e.clientId], e.clientId),
     el("div", { class: "req-headtext" },
       el("div", { class: "req-client" }, clientName(e.clientId)),
-      el("div", { class: "evt-date" }, d.main, el("span", { class: "yr" }, d.yr))
+      el("div", { class: "evt-date" }, d.main + (fmtTime(e.time) ? ` at ${fmtTime(e.time)}` : ""), el("span", { class: "yr" }, d.yr))
     ),
     e.promoted ? el("span", { class: "badge go" }, "Promoted") : false
   ));

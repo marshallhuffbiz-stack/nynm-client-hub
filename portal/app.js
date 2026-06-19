@@ -37,6 +37,7 @@ const uploadStatus = $("upload-status");
 
 const evtTitle = $("evt-title");
 const evtDate = $("evt-date");
+const evtTime = $("evt-time");
 const evtDesc = $("evt-desc");
 const evtSubmit = $("evt-submit");
 
@@ -157,6 +158,14 @@ function formatDate(iso) {
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
+// "19:30" -> "7:30 PM" (locale-friendly). Empty/invalid -> "".
+function formatTime(t) {
+  if (!t || !/^\d{1,2}:\d{2}$/.test(String(t))) return "";
+  const [h, m] = String(t).split(":").map(Number);
+  if (h > 23 || m > 59) return "";
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
 function sortByCreatedDesc(a, b) {
   return String(b && b.createdAt || "").localeCompare(String(a && a.createdAt || ""));
 }
@@ -216,12 +225,14 @@ function renderEvents(events) {
   eventsList.innerHTML = list.map((evt) => {
     const title = esc((evt && evt.title) || "Event");
     const date = formatDate(evt && evt.date);
+    const time = formatTime(evt && evt.time);
+    const when = date ? `${date}${time ? ` at ${time}` : ""}` : "";
     const desc = (evt && evt.description) ? esc(evt.description) : "";
     return `
       <div class="card">
         <div class="evt">
           <div class="evt-title">${title}</div>
-          ${date ? `<div class="evt-date">${date}</div>` : ""}
+          ${when ? `<div class="evt-date">${esc(when)}</div>` : ""}
           ${desc ? `<div class="evt-desc">${desc}</div>` : ""}
         </div>
       </div>`;
@@ -291,6 +302,7 @@ function resetRequestForm() {
 function resetEventForm() {
   evtTitle.value = "";
   evtDate.value = "";
+  evtTime.value = "";
   evtDesc.value = "";
 }
 
@@ -403,6 +415,7 @@ async function submitEvent(event) {
     const res = await api.addEvent({
       title,
       date,
+      time: evtTime.value.trim(),
       description: evtDesc.value.trim(),
     });
     if (res && res.ok) {
