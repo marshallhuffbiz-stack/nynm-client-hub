@@ -13,14 +13,20 @@ import { detectJobs, shouldRunDigest } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
 import { apiFetchAll, apiUpdate } from "./writeback.mjs";
 import { makeNotifier } from "./notify.mjs";
+import { makeShipper, makePostizClient } from "./publish.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+
+// Approved requests of these types auto-publish via the deterministic ship path
+// (worker/publish.mjs). Everything else stays with the Claude drain.
+const SOCIAL_SHIP_TYPES = new Set(["post", "event-promo"]);
 
 export async function runOnce({
   apiBase,
   adminToken,
   caps = { draft: 5, ship: 5 },
   drainer,
+  shipper,
   notifier,
   digestHour = 8,
   getLastDigest,
@@ -37,9 +43,20 @@ export async function runOnce({
     await apiUpdate(apiBase, adminToken, r.id, { meta: { ...(r.meta || {}), notified: true } });
   }
 
+  // Social posts (post / event-promo) auto-publish via the deterministic shipper
+  // in plain Node. Any other approved work (e.g. a website apply) stays with the
+  // Claude drain, which never publishes to social (Skill(post) stays denied).
+  const socialShips = jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type));
+  const drainShips = jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type));
+
   let drainResult = { drafted: 0, shipped: 0 };
-  if (jobs.drafts.length || jobs.ships.length) {
-    drainResult = (await drainer({ apiBase, adminToken, drafts: jobs.drafts, ships: jobs.ships })) || drainResult;
+  if (jobs.drafts.length || drainShips.length) {
+    drainResult = (await drainer({ apiBase, adminToken, drafts: jobs.drafts, ships: drainShips })) || drainResult;
+  }
+
+  let shipResult = { shipped: 0, failed: 0 };
+  if (socialShips.length && shipper) {
+    shipResult = (await shipper({ apiBase, adminToken, ships: socialShips, clients: all.clients || [] })) || shipResult;
   }
 
   let digest = false;
@@ -49,7 +66,15 @@ export async function runOnce({
     digest = true;
   }
 
-  return { newSubmits: jobs.newSubmits.length, drafts: jobs.drafts.length, ships: jobs.ships.length, digest, ...drainResult };
+  return {
+    newSubmits: jobs.newSubmits.length,
+    drafts: jobs.drafts.length,
+    ships: jobs.ships.length,
+    digest,
+    drafted: drainResult.drafted || 0,
+    published: shipResult.shipped || 0,
+    shipFailed: shipResult.failed || 0,
+  };
 }
 
 // Real drainer: write the job brief, spawn one headless Claude that processes it
@@ -175,12 +200,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     await mkdir(HERE, { recursive: true });
     await writeFile(lock, String(process.pid));
     const { getLastDigest, setLastDigest } = await stateGetSet();
+    const notifier = makeNotifier(cfg);
+    const postiz = makePostizClient();
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
       drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude" }),
-      notifier: makeNotifier(cfg),
+      shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
+      notifier,
       digestHour: cfg.digestHour ?? 8,
       getLastDigest,
       setLastDigest,
