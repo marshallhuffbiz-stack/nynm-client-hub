@@ -412,6 +412,9 @@ function requestCard(r) {
       card.append(
         el("div", { class: "req-thumbs" },
           ...atts.map((a) => {
+            if ((a.mime || "").startsWith("audio/")) {
+              return el("audio", { class: "att-audio", controls: "controls", preload: "none", src: a.url });
+            }
             const full = driveEmbed(a.url, "w2000");
             const link = el("a", { class: "thumb zoomable", href: full, target: "_blank", rel: "noopener", title: a.name || "" },
               el("img", { src: driveEmbed(a.url, "w1200"), alt: a.name || "attachment", loading: "lazy" }));
@@ -424,6 +427,7 @@ function requestCard(r) {
   }
 
   card.append(actionArea(r));
+  card.append(threadSection(r));
   return card;
 }
 
@@ -451,6 +455,36 @@ function deleteRequestButton(r) {
     }
   });
   return btn;
+}
+
+// Two-way conversation thread on a request (client <-> team), team perspective.
+function threadSection(r) {
+  const thread = (r.meta && Array.isArray(r.meta.thread)) ? r.meta.thread : [];
+  const wrap = el("div", { class: "thread" });
+  wrap.append(el("div", { class: "thread-label" }, thread.length ? "Conversation" : "Message this client"));
+  if (thread.length) {
+    const list = el("div", { class: "thread-list" });
+    for (const m of thread) {
+      const mine = m.from === "team";
+      list.append(el("div", { class: "msg " + (mine ? "mine" : "theirs") },
+        el("div", { class: "msg-bubble" }, m.text),
+        el("div", { class: "msg-meta" }, `${mine ? "You" : clientName(r.clientId)} · ${relTime(m.at)}`)
+      ));
+    }
+    wrap.append(list);
+  }
+  const ta = el("textarea", { id: `msg-${r.id}`, class: "thread-input", rows: "1", placeholder: "Reply to the client" });
+  ta.addEventListener("focus", () => { typingActive = true; });
+  ta.addEventListener("blur", () => { typingActive = false; });
+  const send = el("button", { type: "button", class: "btn sm" }, "Send");
+  send.addEventListener("click", async () => {
+    const text = ta.value.trim();
+    if (!text) { toast("Type a message first."); return; }
+    const res = await call(() => api.message(r.id, text));
+    if (res) { applyRequest(res.request); toast("Message sent."); render(); }
+  });
+  wrap.append(el("div", { class: "thread-reply" }, ta, send));
+  return wrap;
 }
 
 // ---------- stage-dependent action area ----------
