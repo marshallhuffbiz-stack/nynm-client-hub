@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
-import { runOnce, preflightDisk, isLiveProcess } from "./poller.mjs";
+import { runOnce, preflightDisk, isLiveProcess, drainArgs } from "./poller.mjs";
 import { apiUpdate } from "./writeback.mjs";
 
 let srv, base, dir;
@@ -118,6 +118,16 @@ test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + no
   const row = all.requests.find((r) => r.id === id);
   assert.equal(row.stage, "error");
   assert.match(row.meta.run.error, /Out of space/);
+});
+
+test("drainArgs pins the model when configured, omits --model otherwise", () => {
+  assert.deepEqual(
+    drainArgs({ drainPrompt: "P", settingsPath: "/s.json", model: "claude-opus-4-8" }),
+    ["-p", "P", "--settings", "/s.json", "--model", "claude-opus-4-8"]
+  );
+  const without = drainArgs({ drainPrompt: "P", settingsPath: "/s.json" });
+  assert.deepEqual(without, ["-p", "P", "--settings", "/s.json"]);
+  assert.ok(!without.includes("--model"));
 });
 
 test("isLiveProcess tells a live pid from a stale/empty lock", () => {

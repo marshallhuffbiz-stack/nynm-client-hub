@@ -81,13 +81,23 @@ export async function runOnce({
 
 // Real drainer: write the job brief, spawn one headless Claude that processes it
 // per worker/drain.md (Claude writes results back via worker/wb.mjs). Caller waits.
-export function spawnClaudeDrain({ claudeBin = "claude", cwd = join(HERE, "..") }) {
+// Build the headless `claude` argv for a drain run. Pure + exported so the model
+// pin / settings path are unit-tested (a malformed flag array silently breaks the
+// drain). `model` is optional: when set, drafts run on that model (e.g. Opus 4.8)
+// instead of the CLI default; when unset, the flag is omitted.
+export function drainArgs({ drainPrompt, settingsPath, model }) {
+  const args = ["-p", drainPrompt, "--settings", settingsPath];
+  if (model) args.push("--model", model);
+  return args;
+}
+
+export function spawnClaudeDrain({ claudeBin = "claude", cwd = join(HERE, ".."), model }) {
   return async ({ drafts, ships }) => {
     const briefPath = join(HERE, "drain-jobs.json");
     await writeFile(briefPath, JSON.stringify({ drafts, ships, at: new Date().toISOString() }, null, 2));
     const drainPrompt = await readFile(join(HERE, "drain.md"), "utf8");
     await new Promise((resolve) => {
-      const child = spawn(claudeBin, ["-p", drainPrompt, "--settings", join(HERE, "claude-settings.json")], {
+      const child = spawn(claudeBin, drainArgs({ drainPrompt, settingsPath: join(HERE, "claude-settings.json"), model }), {
         cwd,
         stdio: ["ignore", "inherit", "inherit"],
       });
@@ -208,7 +218,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
-      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude" }),
+      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
       notifier,
       digestHour: cfg.digestHour ?? 8,

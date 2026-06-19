@@ -2,6 +2,8 @@
   "execUrl": "https://script.google.com/macros/s/REPLACE_DEPLOYMENT_ID/exec",
   "adminToken": "REPLACE_WITH_YOUR_ADMIN_TOKEN",
   "claudeBin": "claude",
+  "model": "claude-opus-4-8",
+  "_model_help": "Model the headless drain uses to draft (same skills either way). Set 'claude-opus-4-8' for top quality matching the desktop app; omit to use the claude CLI default (lighter/cheaper).",
   "digestHour": 8,
   "caps": { "draft": 5, "ship": 5 },
   "push": {
