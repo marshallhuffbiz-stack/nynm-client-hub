@@ -77,6 +77,24 @@
   --nav-h: 50px;
   --safe-t: env(safe-area-inset-top, 0px);
   --safe-b: env(safe-area-inset-bottom, 0px);
+
+  /* ===== Liquid Glass (bolder pass): translucent materials, specular edges, depth, accent glow ===== */
+  --glass-card: rgba(255, 255, 255, 0.66);    /* content cards become frosted glass */
+  --glass-chrome: rgba(255, 255, 255, 0.60);  /* nav / segmented / toast chrome */
+  --glass-blur: 20px;
+  --glass-hairline: rgba(60, 60, 67, 0.12);   /* soft outer edge */
+  /* specular = light catching the top edge + a faint full-rim highlight */
+  --specular: inset 0 1px 0 rgba(255, 255, 255, 0.75), inset 0 0 0 0.5px rgba(255, 255, 255, 0.30);
+  --specular-strong: inset 0 1.5px 0 rgba(255, 255, 255, 0.9), inset 0 0 0 0.5px rgba(255, 255, 255, 0.4);
+  /* layered depth: tight key shadow + soft ambient shadow */
+  --depth-1: 0 1px 2px rgba(17, 17, 26, 0.05), 0 8px 20px rgba(17, 17, 26, 0.06);
+  --depth-2: 0 4px 10px rgba(17, 17, 26, 0.07), 0 16px 40px rgba(17, 17, 26, 0.12);
+  --accent-tint: rgba(0, 122, 255, 0.06);
+  --accent-glow: 0 6px 22px rgba(0, 122, 255, 0.30);
+  --focus-glow: 0 0 0 4px var(--blue-fill), 0 4px 14px rgba(0, 122, 255, 0.22);
+  /* faint ambient backdrop so glass has light to refract */
+  --ambient-1: rgba(0, 122, 255, 0.12);
+  --ambient-2: rgba(88, 86, 214, 0.10);
 }
 
 /* ===================== Dark mode (Apple system dark) ===================== */
@@ -111,6 +129,20 @@
 
     --shadow-pop: 0 10px 40px rgba(0,0,0,0.6);
     --shadow-segment: 0 1px 3px rgba(0,0,0,0.5);
+
+    /* Liquid Glass — dark */
+    --glass-card: rgba(44, 44, 47, 0.55);
+    --glass-chrome: rgba(28, 28, 30, 0.60);
+    --glass-hairline: rgba(255, 255, 255, 0.08);
+    --specular: inset 0 1px 0 rgba(255, 255, 255, 0.16), inset 0 0 0 0.5px rgba(255, 255, 255, 0.06);
+    --specular-strong: inset 0 1.5px 0 rgba(255, 255, 255, 0.22), inset 0 0 0 0.5px rgba(255, 255, 255, 0.10);
+    --depth-1: 0 1px 2px rgba(0, 0, 0, 0.45), 0 10px 26px rgba(0, 0, 0, 0.55);
+    --depth-2: 0 6px 16px rgba(0, 0, 0, 0.55), 0 18px 46px rgba(0, 0, 0, 0.65);
+    --accent-tint: rgba(10, 132, 255, 0.12);
+    --accent-glow: 0 6px 26px rgba(10, 132, 255, 0.45);
+    --focus-glow: 0 0 0 4px var(--blue-fill), 0 4px 16px rgba(10, 132, 255, 0.40);
+    --ambient-1: rgba(10, 132, 255, 0.18);
+    --ambient-2: rgba(94, 92, 230, 0.14);
   }
 }
 
@@ -129,7 +161,11 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  background: var(--bg);
+  background:
+    radial-gradient(48% 38% at 12% -5%, var(--ambient-1), transparent 70%),
+    radial-gradient(46% 40% at 92% 105%, var(--ambient-2), transparent 72%),
+    var(--bg);
+  background-attachment: fixed;
   color: var(--label);
   font-family: var(--font);
   font-size: 17px;            /* iOS Body */
@@ -152,10 +188,11 @@ body {
    and blurs under it. */
 .appbar {
   position: sticky; top: 0; z-index: 20;
-  background: var(--nav-glass);
-  -webkit-backdrop-filter: saturate(180%) blur(20px);
-  backdrop-filter: saturate(180%) blur(20px);
+  background: var(--glass-chrome);
+  -webkit-backdrop-filter: saturate(200%) blur(24px);
+  backdrop-filter: saturate(200%) blur(24px);
   border-bottom: 0.5px solid var(--nav-border);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.55), 0 10px 28px -14px rgba(17, 17, 26, 0.22);
   padding-top: var(--safe-t);
 }
 .appbar .wrap {
@@ -175,9 +212,25 @@ body {
 }
 .wordmark-text { display: flex; flex-direction: column; line-height: 1; min-width: 0; }
 .wordmark-name {
+  --sheen: rgba(255, 255, 255, 0.9);
+  position: relative;
   font-family: var(--font-wordmark);
   font-weight: 800; font-size: 21px; line-height: 1; letter-spacing: -0.5px;
-  color: var(--label);
+  color: var(--label);   /* text is ALWAYS solid; the sheen is an overlay glint that sweeps off */
+}
+.wordmark-name::after {
+  content: ""; position: absolute; inset: -25% 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, var(--sheen) 50%, transparent 65%);
+  background-size: 300% 100%; background-position: 150% 0; background-repeat: no-repeat;
+  animation: relay-sheen 1.4s var(--ease) 0.4s both;
+}
+@media (prefers-color-scheme: dark) { .wordmark-name { --sheen: rgba(150, 195, 255, 0.85); } }
+@keyframes relay-sheen { to { background-position: -50% 0; } }
+/* the asterisk mark gives a soft accent pulse as the sheen passes */
+.wordmark-mark { filter: drop-shadow(0 0 0 transparent); animation: relay-mark-glow 1.6s var(--ease) 0.35s both; }
+@keyframes relay-mark-glow {
+  0%, 100% { filter: drop-shadow(0 0 0 transparent); }
+  40% { filter: drop-shadow(0 0 6px rgba(0, 122, 255, 0.55)); }
 }
 .wordmark-by {
   font-family: var(--font); font-weight: 500; font-size: 11px; line-height: 1.1;
@@ -208,10 +261,14 @@ h1, h2, h3 { font-family: var(--font); margin: 0; }
 
 /* ===================== Cards — grouped inset ===================== */
 .card {
-  background: var(--card);
+  position: relative;
+  background: var(--glass-card);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  backdrop-filter: blur(var(--glass-blur)) saturate(180%);
+  border: 0.5px solid var(--glass-hairline);
   border-radius: var(--r-card);
   padding: 16px;
-  box-shadow: var(--shadow-card);
+  box-shadow: var(--depth-1), var(--specular);
   margin-bottom: 16px;
 }
 .card h2 { font-size: 22px; font-weight: 600; letter-spacing: -0.4px; margin-bottom: 4px; }
@@ -241,11 +298,12 @@ input[type="email"], input[type="tel"], textarea, select {
   background: var(--fill-input); border: none; border-radius: var(--r-input);
   padding: 12px 16px; outline: none; letter-spacing: -0.2px;
   -webkit-appearance: none; appearance: none;
+  box-shadow: var(--specular);
   transition: box-shadow var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
 }
 input::placeholder, textarea::placeholder { color: var(--placeholder); }
 input:focus, textarea:focus, select:focus {
-  box-shadow: 0 0 0 4px var(--blue-fill);
+  box-shadow: var(--focus-glow);
 }
 textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 
@@ -257,21 +315,26 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
   border-radius: var(--r-button-sm); padding: 12px 18px; cursor: pointer; min-height: 44px;
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   user-select: none; -webkit-user-select: none;
-  transition: transform 120ms var(--ease), background var(--dur-fast) var(--ease),
-              filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+  box-shadow: var(--specular);
+  transition: transform 220ms var(--spring), background var(--dur-fast) var(--ease),
+              box-shadow var(--dur-fast) var(--ease), filter var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
 }
 .btn:hover { background: var(--gray-fill-2); }
-.btn:active { transform: scale(0.97); opacity: 0.9; }
-.btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
+.btn:active { transform: scale(0.96); opacity: 0.92; filter: brightness(0.97) saturate(1.08); }
+.btn:focus-visible { outline: none; box-shadow: var(--focus-glow); }
 .btn.block { width: 100%; }
 
-/* Filled (prominent) — primary actions use systemBlue, capsule, ~50px high */
+/* Filled (prominent) — systemBlue capsule with a top sheen + colored ambient glow + bright rim */
 .btn.primary, .btn.send, .btn.go {
-  background: var(--blue); color: var(--on-accent);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0) 42%),
+    var(--blue);
+  color: var(--on-accent);
   border-radius: var(--r-button); min-height: 50px; padding-left: 22px; padding-right: 22px;
+  box-shadow: var(--accent-glow), var(--specular-strong);
 }
-.btn.primary:hover, .btn.send:hover, .btn.go:hover { background: var(--blue); filter: brightness(1.05); }
-.btn.primary:active, .btn.send:active, .btn.go:active { filter: brightness(0.92); }
+.btn.primary:hover, .btn.send:hover, .btn.go:hover { filter: brightness(1.06); }
+.btn.primary:active, .btn.send:active, .btn.go:active { filter: brightness(0.93) saturate(1.1); }
 
 /* Secondary / plain (tinted) */
 .btn.ghost { background: transparent; color: var(--blue); }
@@ -338,7 +401,9 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
   background: var(--toast-bg); color: #ffffff;
   -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%);
   padding: 12px 18px; border-radius: var(--r-pill); font-size: 15px; font-weight: 500;
-  letter-spacing: -0.2px; box-shadow: var(--shadow-pop);
+  letter-spacing: -0.2px;
+  border: 0.5px solid rgba(255, 255, 255, 0.14);
+  box-shadow: var(--shadow-pop), inset 0 1px 0 rgba(255, 255, 255, 0.22);
   opacity: 0; pointer-events: none; z-index: 80;
   transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
@@ -385,12 +450,19 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
   }
 }
 
+/* ===================== Entrance reveal (smooth one-time rise-in) ===================== */
+.large-title, #view-app { animation: rise-in 0.5s var(--ease) both; }
+@keyframes rise-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
 /* ===================== Reduced motion ===================== */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-property: opacity, color, background-color, border-color, box-shadow, filter !important;
+    animation-duration: 0.001ms !important; animation-delay: 0s !important;
   }
   .btn:active, .chip:active, .seg-btn:active { transform: none !important; }
   .seg-thumb { transition: none !important; }
   .lightbox img { transform: none !important; }
+  .wordmark-name::after { display: none !important; }
+  .large-title, #view-app, .wordmark-mark { animation: none !important; transform: none !important; opacity: 1 !important; }
 }
