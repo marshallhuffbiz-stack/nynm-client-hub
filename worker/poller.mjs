@@ -4,7 +4,7 @@
 //   3. runs the Claude drain for queued/changes (stage a draft) and approved (ship),
 //   4. sends a daily digest when due.
 // runOnce() is dependency-injected so it can be tested without spawning Claude.
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { readFile, writeFile, mkdir, statfs } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -72,6 +72,50 @@ export function spawnClaudeDrain({ claudeBin = "claude", cwd = join(HERE, "..") 
   };
 }
 
+// Pre-flight disk guard. Rendering a post needs room; if the machine is low on
+// disk the render fails and silently strands a request in "drafting" (and the
+// worker can't even write its .lock). So BEFORE drafting we check free space: if
+// it's below the floor, surface every blocked request as a clear "out of space"
+// error (the Desk shows it with a Retry), notify Marshall, and tell the caller to
+// skip this tick. All writebacks are network calls, so they work with a full disk.
+// statfsFn/fetchAll/update/notifier are injected so this is unit-testable.
+export async function preflightDisk({
+  apiBase,
+  adminToken,
+  minFreeBytes,
+  dir,
+  statfsFn = statfs,
+  fetchAll = apiFetchAll,
+  update = apiUpdate,
+  notifier,
+}) {
+  let free;
+  try {
+    const st = await statfsFn(dir);
+    free = st.bavail * st.bsize;
+  } catch {
+    return { ok: true, free: null }; // can't measure -> don't block
+  }
+  if (free >= minFreeBytes) return { ok: true, free };
+
+  const freeMB = Math.round(free / 1048576);
+  let marked = 0;
+  try {
+    const all = await fetchAll(apiBase, adminToken);
+    const blocked = ((all && all.requests) || []).filter((r) => r.stage === "queued" || r.stage === "drafting");
+    const msg = `Out of space on the worker machine (${freeMB} MB free). Free disk space, then tap Retry.`;
+    for (const r of blocked) {
+      const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: msg } };
+      const res = await update(apiBase, adminToken, r.id, { stage: "error", meta });
+      if (res && res.ok !== false) marked += 1;
+    }
+    if (notifier && notifier.notifyBlocked) await notifier.notifyBlocked({ freeMB, count: blocked.length });
+  } catch {
+    /* surfacing is best-effort; the important part is NOT attempting the render */
+  }
+  return { ok: false, free, marked };
+}
+
 async function loadConfig() {
   const p = join(HERE, "config.json");
   if (!existsSync(p)) throw new Error("worker/config.json missing — copy config.example.json and fill it in (SETUP.md §4)");
@@ -95,13 +139,25 @@ async function stateGetSet() {
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const lock = join(HERE, ".lock");
   try {
+    const cfg = await loadConfig();
+    // Pre-flight: if the disk is too low to render, surface it + skip (don't strand a request mid-render).
+    const guard = await preflightDisk({
+      apiBase: cfg.execUrl,
+      adminToken: cfg.adminToken,
+      minFreeBytes: cfg.minFreeBytes ?? 2 * 1024 ** 3,
+      dir: HERE,
+      notifier: makeNotifier(cfg),
+    });
+    if (!guard.ok) {
+      console.error(new Date().toISOString(), `worker paused: low disk (${Math.round((guard.free || 0) / 1048576)} MB free); flagged ${guard.marked} request(s) for retry`);
+      process.exit(0);
+    }
     if (existsSync(lock)) {
       console.log("another drain holds the lock; skipping this tick");
       process.exit(0);
     }
     await mkdir(HERE, { recursive: true });
     await writeFile(lock, String(process.pid));
-    const cfg = await loadConfig();
     const { getLastDigest, setLastDigest } = await stateGetSet();
     const res = await runOnce({
       apiBase: cfg.execUrl,

@@ -589,13 +589,22 @@ async function safeUpdate(id, patch) {
 
 function buildingStatus(r) {
   const skill = r.meta && r.meta.run && r.meta.run.skill;
-  return el("div", { class: "act" },
-    el("div", { class: "statusline" },
-      el("span", { class: "dot" }),
-      document.createTextNode("Sent to Claude, building the draft…"),
-      skill ? el("span", { class: "skill" }, `· ${skill}`) : false
-    )
-  );
+  const wrap = el("div", { class: "act stack" });
+  wrap.append(el("div", { class: "statusline" },
+    el("span", { class: "dot" }),
+    document.createTextNode(r.stage === "queued" ? "Queued for Claude…" : "Sent to Claude, building the draft…"),
+    skill ? el("span", { class: "skill" }, `· ${skill}`) : false
+  ));
+  // Manual recovery: if a draft stalls (e.g. the worker hit a snag), re-queue it.
+  const reset = el("button", { type: "button", class: "btn ghost sm" }, "Reset to queue");
+  reset.addEventListener("click", async () => {
+    if (!window.confirm("Reset this request back to the queue? The worker will pick it up again on its next run.")) return;
+    const res = await call(() => api.update(r.id, { stage: "queued", draft: null }));
+    if (res) { applyRequest(res.request); toast("Reset to the queue."); render(); }
+  });
+  wrap.append(el("div", { class: "btn-row" }, reset));
+  wrap.append(el("div", { class: "dev-note" }, "If a draft seems stuck, Reset re-queues it for the next worker run."));
+  return wrap;
 }
 
 function shippingStatus(r) {

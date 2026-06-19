@@ -51,5 +51,11 @@ export function makeNotifier(config = {}) {
       await macNotify(title, body);
       await pushNotify(push, title, body);
     },
+    async notifyBlocked({ freeMB, count }) {
+      const title = "Relay worker paused";
+      const msg = `The Mac is low on disk (${freeMB} MB free). ${count} post${count === 1 ? "" : "s"} flagged. Free space, then tap Retry on the Desk.`;
+      await macNotify(title, msg);
+      await pushNotify(push, title, msg);
+    },
   };
 }

@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
-import { runOnce } from "./poller.mjs";
+import { runOnce, preflightDisk } from "./poller.mjs";
 import { apiUpdate } from "./writeback.mjs";
 
 let srv, base, dir;
@@ -79,4 +79,37 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
   assert.equal(byId.q1.stage, "ready");
   assert.equal(byId.q1.draft.caption, "stub");
   assert.equal(byId.a1.stage, "done");
+});
+
+test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + notifies", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "disk guard test" } }),
+  }).then((r) => r.json());
+  const id = created.id;
+  await apiUpdate(base, "A", id, { action: "send" }); // submitted -> queued
+
+  // Ample free space -> no-op, request stays queued.
+  const ample = await preflightDisk({
+    apiBase: base, adminToken: "A", minFreeBytes: 1024, dir: ".",
+    statfsFn: async () => ({ bavail: 1_000_000, bsize: 4096 }), notifier: {},
+  });
+  assert.equal(ample.ok, true);
+  let all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(all.requests.find((r) => r.id === id).stage, "queued");
+
+  // Low free space -> flag the request as an out-of-space error + notify, skip drain.
+  let blocked = null;
+  const notifier = { async notifyBlocked(info) { blocked = info; } };
+  const low = await preflightDisk({
+    apiBase: base, adminToken: "A", minFreeBytes: 2 * 1024 ** 3, dir: ".",
+    statfsFn: async () => ({ bavail: 25_600, bsize: 4096 }), notifier, // ~100 MB free
+  });
+  assert.equal(low.ok, false);
+  assert.ok(low.marked >= 1);
+  assert.ok(blocked && blocked.count >= 1);
+  all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const row = all.requests.find((r) => r.id === id);
+  assert.equal(row.stage, "error");
+  assert.match(row.meta.run.error, /Out of space/);
 });
