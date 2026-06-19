@@ -57,5 +57,20 @@ export function makeNotifier(config = {}) {
       await macNotify(title, msg);
       await pushNotify(push, title, msg);
     },
+    async notifyShipped({ req, channels }) {
+      const title = "Relay — published";
+      const where = (channels || [])
+        .map((c) => (c === "facebook" ? "Facebook" : c === "instagram" ? "Instagram" : c))
+        .join(" + ") || "social";
+      const msg = `${req.clientId}: "${req.title || req.type}" is live on ${where}.`;
+      await macNotify(title, msg);
+      await pushNotify(push, title, msg);
+    },
+    async notifyShipFailed({ req, error }) {
+      const title = "Relay — publish failed";
+      const msg = `${req.clientId}: "${req.title || req.type}" didn't publish. ${error || ""}`.trim();
+      await macNotify(title, msg);
+      await pushNotify(push, title, msg);
+    },
   };
 }

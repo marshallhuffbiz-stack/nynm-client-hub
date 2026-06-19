@@ -42,17 +42,21 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
     async notifyNew(r) { notified.push(r.id); },
     async notifyDigest() { digestCalled++; },
   };
-  // Stub drainer = what the headless Claude drain does, via the real API.
-  const drainer = async ({ apiBase, adminToken, drafts, ships }) => {
+  // Stub drainer = the headless Claude drain (drafts only now; social ships go to the shipper).
+  const drainer = async ({ apiBase, adminToken, drafts }) => {
     for (const d of drafts) {
       await apiUpdate(apiBase, adminToken, d.id, { action: "start" });
       await apiUpdate(apiBase, adminToken, d.id, { action: "ready", draft: { caption: "stub" } });
     }
+    return { drafted: drafts.length };
+  };
+  // Stub shipper = the deterministic ship path; publishes approved social posts.
+  const shipper = async ({ apiBase, adminToken, ships }) => {
     for (const s of ships) {
       await apiUpdate(apiBase, adminToken, s.id, { action: "ship" });
       await apiUpdate(apiBase, adminToken, s.id, { action: "done" });
     }
-    return { drafted: drafts.length, shipped: ships.length };
+    return { shipped: ships.length, failed: 0 };
   };
   let lastDigest = null;
   const res = await runOnce({
@@ -60,6 +64,7 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
     adminToken: "A",
     caps: { draft: 5, ship: 5 },
     drainer,
+    shipper,
     notifier,
     digestHour: 0,
     getLastDigest: async () => lastDigest,
@@ -70,6 +75,7 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
   assert.deepEqual(notified, ["s1"]);
   assert.equal(res.drafts, 1);
   assert.equal(res.ships, 1);
+  assert.equal(res.published, 1);
   assert.equal(res.digest, true);
   assert.equal(digestCalled, 1);
 
