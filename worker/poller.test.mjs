@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
-import { runOnce, preflightDisk } from "./poller.mjs";
+import { runOnce, preflightDisk, isLiveProcess } from "./poller.mjs";
 import { apiUpdate } from "./writeback.mjs";
 
 let srv, base, dir;
@@ -112,4 +112,11 @@ test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + no
   const row = all.requests.find((r) => r.id === id);
   assert.equal(row.stage, "error");
   assert.match(row.meta.run.error, /Out of space/);
+});
+
+test("isLiveProcess tells a live pid from a stale/empty lock", () => {
+  assert.equal(isLiveProcess(process.pid), true);
+  assert.equal(isLiveProcess(2147483646), false); // a pid that is not running
+  assert.equal(isLiveProcess(""), false);
+  assert.equal(isLiveProcess("nope"), false);
 });

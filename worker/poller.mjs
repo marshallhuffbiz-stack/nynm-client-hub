@@ -5,7 +5,7 @@
 //   4. sends a daily digest when due.
 // runOnce() is dependency-injected so it can be tested without spawning Claude.
 import { readFile, writeFile, mkdir, statfs } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
@@ -116,6 +116,15 @@ export async function preflightDisk({
   return { ok: false, free, marked };
 }
 
+// True if `pid` is a currently-running process — used to tell a live drain's lock
+// from a stale one left by a crashed, killed, or out-of-space run. EPERM means the
+// process exists but is owned by another user, which still counts as alive.
+export function isLiveProcess(pid) {
+  const n = Number(pid);
+  if (!n || Number.isNaN(n)) return false;
+  try { process.kill(n, 0); return true; } catch (e) { return !!(e && e.code === "EPERM"); }
+}
+
 async function loadConfig() {
   const p = join(HERE, "config.json");
   if (!existsSync(p)) throw new Error("worker/config.json missing — copy config.example.json and fill it in (SETUP.md §4)");
@@ -153,8 +162,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exit(0);
     }
     if (existsSync(lock)) {
-      console.log("another drain holds the lock; skipping this tick");
-      process.exit(0);
+      let heldPid = "";
+      try { heldPid = readFileSync(lock, "utf8").trim(); } catch {}
+      if (isLiveProcess(heldPid)) {
+        console.log("another drain holds the lock; skipping this tick");
+        process.exit(0);
+      }
+      // Stale lock (a crashed / killed / out-of-space run, or an empty file) — reclaim it.
+      console.error(new Date().toISOString(), `reclaiming stale lock (pid ${heldPid || "none"} not running)`);
+      try { unlinkSync(lock); } catch {}
     }
     await mkdir(HERE, { recursive: true });
     await writeFile(lock, String(process.pid));
@@ -173,9 +189,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } catch (e) {
     console.error("poller error:", e.message);
   } finally {
-    try {
-      const { unlinkSync } = await import("node:fs");
-      unlinkSync(lock);
-    } catch {}
+    try { unlinkSync(lock); } catch {}
   }
 }
