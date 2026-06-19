@@ -30,6 +30,7 @@ export const portalApi = (clientToken, pin = "") => ({
   submit: (request) => http("POST", "", { c: clientToken, action: "submitRequest", request }),
   addEvent: (event) => http("POST", "", { c: clientToken, action: "addEvent", event }),
   upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }),
+  message: (id, text) => http("POST", "", { c: clientToken, action: "postMessage", id, text }),
 });
 
 // Request Desk — admin token in the URL (?k=…).
@@ -39,6 +40,7 @@ export const deskApi = (adminToken) => ({
   promote: (eventId) => http("POST", "", { admin: adminToken, action: "promoteEvent", eventId }),
   upsertClient: (client) => http("POST", "", { admin: adminToken, action: "upsertClient", client }),
   remove: (id) => http("POST", "", { admin: adminToken, action: "deleteRequest", id }),
+  message: (id, text) => http("POST", "", { admin: adminToken, action: "postMessage", id, text }),
 });
 
 // Turn a File object into the {name,mime,dataBase64} the upload action expects.

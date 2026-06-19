@@ -344,6 +344,14 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .btn.danger { background: var(--red-fill); color: var(--red); }
 .btn.danger:hover { background: var(--red-fill); filter: brightness(0.97); }
 
+/* Voice-note button while recording: red tint + pulsing dot */
+.btn.recording { background: var(--red-fill); color: var(--red); }
+.btn.recording::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--red);
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+@keyframes rec-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
 .btn.sm { font-size: 15px; padding: 9px 15px; min-height: 44px; border-radius: var(--r-button-sm); }
 
 .btn:disabled, .btn[disabled] { opacity: 0.4; pointer-events: none; }
@@ -393,6 +401,8 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
   display: grid; place-items: center; color: var(--label-3); overflow: hidden; flex: none;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.thumb-audio { background: var(--blue-fill); color: var(--blue); font-weight: 600; font-size: 12px; }
+.att-audio { width: 100%; max-width: 280px; height: 40px; }
 
 /* ===================== Toast ===================== */
 .toast {
@@ -441,6 +451,24 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
 .lightbox-close:active { transform: scale(0.94); }
 /* any image wired as a lightbox trigger gets the zoom affordance */
 .zoomable { cursor: zoom-in; }
+
+/* ===================== Conversation thread (per request, shared by portal + desk) ===================== */
+.thread { margin-top: 16px; padding-top: 14px; border-top: 0.5px solid var(--separator); }
+.thread-label { font-size: 13px; font-weight: 600; color: var(--label-2); letter-spacing: -0.1px; margin-bottom: 10px; }
+.thread-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.msg { display: flex; flex-direction: column; max-width: 84%; }
+.msg.mine { align-self: flex-end; align-items: flex-end; }
+.msg.theirs { align-self: flex-start; align-items: flex-start; }
+.msg-bubble {
+  padding: 8px 13px; border-radius: 18px; font-size: 15px; line-height: 1.35; letter-spacing: -0.2px;
+  white-space: pre-wrap; word-break: break-word;
+}
+.msg.mine .msg-bubble { background: var(--blue); color: var(--on-accent); border-bottom-right-radius: 5px; }
+.msg.theirs .msg-bubble { background: var(--fill-input); color: var(--label); border-bottom-left-radius: 5px; }
+.msg-meta { font-size: 11px; color: var(--label-3); margin-top: 3px; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.thread-reply { display: flex; gap: 8px; align-items: flex-end; }
+.thread-input { flex: 1; min-width: 0; min-height: 40px; }
+.thread-reply .btn { flex: none; }
 
 /* ===================== Continuous (squircle) corners — progressive enhancement ===================== */
 @supports (corner-shape: superellipse(1.8)) {

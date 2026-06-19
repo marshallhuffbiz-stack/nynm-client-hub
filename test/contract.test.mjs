@@ -142,3 +142,18 @@ test("addEvent stores an optional start time; bad time rejected", async () => {
   const bad = await post({ c: "tok-o", action: "addEvent", event: { title: "x", date: "2026-07-10", time: "25:99" } });
   assert.equal(bad.status, 400);
 });
+
+test("postMessage threads client + team replies; empty + missing rejected", async () => {
+  const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "thread test" } });
+  const id = created.body.id;
+  const m1 = await post({ c: "tok-o", action: "postMessage", id, text: "Can you make it brighter?" });
+  assert.equal(m1.status, 200);
+  assert.equal(m1.body.request.meta.thread.length, 1);
+  assert.equal(m1.body.request.meta.thread[0].from, "client");
+  const m2 = await post({ admin: "testadmin", action: "postMessage", id, text: "On it." });
+  assert.equal(m2.body.request.meta.thread.at(-1).from, "team");
+  const empty = await post({ admin: "testadmin", action: "postMessage", id, text: "   " });
+  assert.equal(empty.status, 400);
+  const missing = await post({ admin: "testadmin", action: "postMessage", id: "req_nope", text: "hi" });
+  assert.equal(missing.status, 404);
+});

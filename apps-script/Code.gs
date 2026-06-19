@@ -449,7 +449,7 @@ function doPost(e) {
     if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].indexOf(action) >= 0 && !adminOk) {
       return json_(403, { ok: false, error: "admin required" });
     }
-    if (["submitRequest", "addEvent", "uploadAttachment"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
+    if (["submitRequest", "addEvent", "uploadAttachment", "postMessage"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
       return json_(403, { ok: false, error: "client link required" });
     }
 
@@ -486,6 +486,9 @@ function doPost(e) {
         case "deleteRequest":
           result = handleDeleteRequest_(body);
           break;
+        case "postMessage":
+          result = handlePostMessage_(body, clientForAuth);
+          break;
         default:
           result = { code: 400, obj: { ok: false, error: "unknown action" } };
       }
@@ -512,6 +515,30 @@ function handleDeleteRequest_(body) {
   var sheet = getOrCreateSheet_(SHEET_REQUESTS, colsFor_(SHEET_REQUESTS));
   sheet.deleteRow(rec.__row);
   return { code: 200, obj: { ok: true, id: body.id, deleted: true } };
+}
+
+// Append a message to a request's two-way thread (client <-> team). A client may
+// only post to its own request; admin may post to any. Stored in meta.thread (JSON).
+function handlePostMessage_(body, client) {
+  var adminOk = !!(body.admin && body.admin === getAdminToken_());
+  var requests = readAll_(SHEET_REQUESTS);
+  var rec = null;
+  for (var i = 0; i < requests.length; i++) {
+    if (requests[i].id === body.id) { rec = requests[i]; break; }
+  }
+  if (!rec) return { code: 404, obj: { ok: false, error: "not found" } };
+  if (!adminOk && (!client || rec.clientId !== client.clientId)) {
+    return { code: 403, obj: { ok: false, error: "not your request" } };
+  }
+  var text = String(body.text || "").trim();
+  if (!text) return { code: 400, obj: { ok: false, error: "empty message" } };
+  rec.meta = rec.meta || { activity: [] };
+  var thread = (rec.meta.thread || []).slice();
+  thread.push({ at: now_(), from: adminOk ? "team" : "client", text: text });
+  rec.meta.thread = thread;
+  var merged = mergePatch_(rec, {}, now_());
+  writeRow_(SHEET_REQUESTS, rec.__row, merged);
+  return { code: 200, obj: { ok: true, request: stripRowMeta_(merged) } };
 }
 
 function handleSubmitRequest_(body, client) {

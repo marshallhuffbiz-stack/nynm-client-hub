@@ -97,11 +97,14 @@
             <textarea id="req-desc" placeholder=""></textarea>
           </div>
           <div>
-            <label>Photos <span class="muted">(optional)</span></label>
+            <label>Photos or a voice note <span class="muted">(optional)</span></label>
             <div class="row wrap-row">
+              <label class="btn sm" for="req-camera" style="margin:0">Take photo</label>
               <label class="btn sm" for="req-files" style="margin:0">Add photos</label>
+              <button type="button" id="req-voice" class="btn sm">Voice note</button>
               <span id="upload-status" class="muted small"></span>
             </div>
+            <input id="req-camera" type="file" accept="image/*" capture="environment" class="visually-hidden" />
             <input id="req-files" type="file" accept="image/*" multiple class="visually-hidden" />
             <div id="thumbs" class="thumbs hidden"></div>
           </div>

@@ -31,6 +31,8 @@ const reqTitle = $("req-title");
 const reqDesc = $("req-desc");
 const reqDescLabel = $("req-desc-label");
 const reqFiles = $("req-files");
+const reqCamera = $("req-camera");
+const reqVoice = $("req-voice");
 const reqSubmit = $("req-submit");
 const thumbsEl = $("thumbs");
 const uploadStatus = $("upload-status");
@@ -166,6 +168,39 @@ function formatTime(t) {
   return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 }
 
+// Relative timestamp for thread messages.
+function msgWhen(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const mins = Math.round((Date.now() - t) / 60000), hrs = Math.round(mins / 60), days = Math.round(hrs / 24);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (hrs < 24) return `${hrs} hr ago`;
+  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// The per-request conversation thread (client perspective: client = "You").
+function threadHtml(req) {
+  const thread = (req && req.meta && Array.isArray(req.meta.thread)) ? req.meta.thread : [];
+  const msgs = thread.map((m) => {
+    const mine = m.from === "client";
+    return `<div class="msg ${mine ? "mine" : "theirs"}">
+        <div class="msg-bubble">${esc(m.text)}</div>
+        <div class="msg-meta">${mine ? "You" : "NYNM"} · ${esc(msgWhen(m.at))}</div>
+      </div>`;
+  }).join("");
+  return `
+    <div class="thread">
+      <div class="thread-label">${thread.length ? "Conversation" : "Add a note for the team"}</div>
+      ${thread.length ? `<div class="thread-list">${msgs}</div>` : ""}
+      <div class="thread-reply">
+        <textarea class="thread-input" data-msg-id="${esc(req.id)}" rows="1" placeholder="Message your team"></textarea>
+        <button type="button" class="btn sm" data-msg-send="${esc(req.id)}">Send</button>
+      </div>
+    </div>`;
+}
+
 function sortByCreatedDesc(a, b) {
   return String(b && b.createdAt || "").localeCompare(String(a && a.createdAt || ""));
 }
@@ -208,6 +243,7 @@ function renderRequests(requests) {
           </div>
           ${stageBadge(req && req.stage)}
         </div>
+        ${threadHtml(req)}
       </div>`;
   }).join("");
 }
@@ -249,7 +285,11 @@ function renderThumbs() {
   }
   thumbsEl.classList.remove("hidden");
   thumbsEl.innerHTML = pendingAttachments.map((a) => {
-    const isImage = (a.mime || "").startsWith("image/") && a.url;
+    const mime = a.mime || "";
+    if (mime.startsWith("audio/")) {
+      return `<div class="thumb thumb-audio" title="${esc(a.name || "voice note")}"><span class="small">voice</span></div>`;
+    }
+    const isImage = mime.startsWith("image/") && a.url;
     const inner = isImage
       ? `<img class="zoomable" src="${esc(a.url)}" alt="${esc(a.name || "attachment")}" />`
       : `<span class="small">file</span>`;
@@ -290,9 +330,11 @@ function selectType(type) {
 /* ---------- form reset ---------- */
 
 function resetRequestForm() {
+  if (recording) stopVoice();
   reqTitle.value = "";
   reqDesc.value = "";
   reqFiles.value = "";
+  reqCamera.value = "";
   pendingAttachments = [];
   uploadingCount = 0;
   uploadStatus.textContent = "";
@@ -308,36 +350,103 @@ function resetEventForm() {
 
 /* ---------- upload on selection ---------- */
 
-async function onFilesPicked() {
-  const files = Array.from(reqFiles.files || []);
+async function onFilesPicked(inputEl) {
+  const src = inputEl || reqFiles;
+  const files = Array.from(src.files || []);
   if (files.length === 0) return;
+  src.value = ""; // allow re-picking the same file later
+  for (const file of files) await uploadOne(file);
+}
 
-  // Allow re-picking more later: clear the input now so the same file can be re-added.
-  reqFiles.value = "";
-
-  uploadingCount += files.length;
+// Upload one File (photo, camera shot, or recorded voice note); track as a pending attachment.
+async function uploadOne(file) {
+  uploadingCount += 1;
   updateUploadStatus();
-
-  for (const file of files) {
-    try {
-      const payload = await fileToPayload(file);
-      const res = await api.upload(payload);
-      if (res && res.ok && res.url) {
-        pendingAttachments.push({
-          name: res.name || file.name,
-          url: res.url,
-          mime: res.mime || file.type || "",
-        });
-        renderThumbs();
-      } else {
-        toast("A photo didn't upload. Try again.");
-      }
-    } catch (err) {
-      toast("A photo didn't upload. Try again.");
-    } finally {
-      uploadingCount = Math.max(0, uploadingCount - 1);
-      updateUploadStatus();
+  try {
+    const payload = await fileToPayload(file);
+    const res = await api.upload(payload);
+    if (res && res.ok && res.url) {
+      pendingAttachments.push({ name: res.name || file.name, url: res.url, mime: res.mime || file.type || "" });
+      renderThumbs();
+    } else {
+      toast("That didn't upload. Try again.");
     }
+  } catch (err) {
+    toast("That didn't upload. Try again.");
+  } finally {
+    uploadingCount = Math.max(0, uploadingCount - 1);
+    updateUploadStatus();
+  }
+}
+
+/* ---------- voice note: record audio + best-effort on-device transcription ---------- */
+let mediaRecorder = null;
+let recChunks = [];
+let recognizer = null;
+let recording = false;
+
+async function toggleVoice() {
+  if (recording) { stopVoice(); return; }
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    toast("Allow microphone access to leave a voice note.");
+    return;
+  }
+  let mr;
+  try { mr = new MediaRecorder(stream); }
+  catch (err) { toast("Voice notes aren't supported on this browser."); stream.getTracks().forEach((t) => t.stop()); return; }
+  mediaRecorder = mr;
+  recChunks = [];
+  mr.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mr.onstop = async () => {
+    stream.getTracks().forEach((t) => t.stop());
+    const type = mr.mimeType || "audio/webm";
+    const ext = /mp4|aac|m4a/.test(type) ? "m4a" : "webm";
+    const blob = new Blob(recChunks, { type });
+    if (blob.size > 0) await uploadOne(new File([blob], `voice-note-${Date.now()}.${ext}`, { type }));
+  };
+  mr.start();
+  startRecognition();
+  recording = true;
+  reqVoice.textContent = "Stop recording";
+  reqVoice.classList.add("recording");
+  uploadStatus.textContent = "Recording, tap stop when done.";
+}
+
+function stopVoice() {
+  recording = false;
+  reqVoice.textContent = "Voice note";
+  reqVoice.classList.remove("recording");
+  try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch (e) { /* ignore */ }
+  try { if (recognizer) recognizer.stop(); } catch (e) { /* ignore */ }
+}
+
+// Live speech-to-text where the browser supports it; no-ops where it doesn't
+// (the recorded audio is always attached as the reliable fallback).
+function startRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { recognizer = null; return; }
+  try {
+    recognizer = new SR();
+    recognizer.lang = navigator.language || "en-US";
+    recognizer.continuous = true;
+    recognizer.interimResults = false;
+    recognizer.onresult = (ev) => {
+      let add = "";
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        if (ev.results[i].isFinal) add += ev.results[i][0].transcript;
+      }
+      if (add) {
+        const sep = reqDesc.value && !/\s$/.test(reqDesc.value) ? " " : "";
+        reqDesc.value = (reqDesc.value + sep + add.trim()).trim();
+      }
+    };
+    recognizer.onerror = () => { /* transcription unavailable; the audio still attaches */ };
+    recognizer.start();
+  } catch (e) {
+    recognizer = null;
   }
 }
 
@@ -358,16 +467,22 @@ async function submitRequest(event) {
   event.preventDefault();
   if (busy) return;
 
-  const description = reqDesc.value.trim();
-  if (!description) {
-    toast("Add a short description so we know what you need.");
+  if (recording) {
+    stopVoice();
+    toast("Saving your voice note, tap Submit again in a moment.");
+    return;
+  }
+  let description = reqDesc.value.trim();
+  if (!description && pendingAttachments.length === 0) {
+    toast("Add a short note, a photo, or a voice note so we know what you need.");
     reqDesc.focus();
     return;
   }
   if (uploadingCount > 0) {
-    toast("Hang on, photos are still uploading.");
+    toast("Hang on, an upload is still finishing.");
     return;
   }
+  if (!description) description = "Please post this.";
 
   setBusy(true, reqSubmit, "Sending…");
   try {
@@ -557,13 +672,33 @@ typeChips.addEventListener("keydown", (e) => {
 });
 requestForm.addEventListener("submit", submitRequest);
 eventForm.addEventListener("submit", submitEvent);
-reqFiles.addEventListener("change", onFilesPicked);
+reqFiles.addEventListener("change", () => onFilesPicked(reqFiles));
+reqCamera.addEventListener("change", () => onFilesPicked(reqCamera));
+reqVoice.addEventListener("click", toggleVoice);
 $("view-pin").addEventListener("submit", onPinSubmit);
 
 // Tap an attachment preview to view it full size.
 thumbsEl.addEventListener("click", (e) => {
   const img = e.target.closest(".thumb img");
   if (img && img.src) openLightbox(img.src, img.alt || "attachment");
+});
+
+// Send a message on a request's thread (delegated — request cards are re-rendered on refresh).
+requestsList.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-msg-send]");
+  if (!btn) return;
+  const id = btn.getAttribute("data-msg-send");
+  const ta = requestsList.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
+  const text = ta ? ta.value.trim() : "";
+  if (!text) { toast("Type a message first."); if (ta) ta.focus(); return; }
+  btn.disabled = true;
+  try {
+    const res = await api.message(id, text);
+    if (res && res.ok) { toast("Message sent."); await refresh(); }
+    else { toast("That didn't send. Please try again."); btn.disabled = false; }
+  } catch (err) {
+    toast("That didn't send. Please try again."); btn.disabled = false;
+  }
 });
 
 // Default selection + initial load.

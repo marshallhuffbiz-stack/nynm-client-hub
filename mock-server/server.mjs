@@ -94,7 +94,7 @@ export function createApp({ storePath, uploadsDir }) {
 
         if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].includes(action) && !adminOk)
           return send(res, 403, { ok: false, error: "admin required" });
-        if (["submitRequest", "addEvent", "uploadAttachment"].includes(action) && !client && !adminOk)
+        if (["submitRequest", "addEvent", "uploadAttachment", "postMessage"].includes(action) && !client && !adminOk)
           return send(res, 403, { ok: false, error: "client link required" });
 
         const result = await store.tx(async (data) => {
@@ -157,6 +157,20 @@ export function createApp({ storePath, uploadsDir }) {
               if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
               const [removed] = data.requests.splice(idx, 1);
               return { code: 200, obj: { ok: true, id: removed.id, deleted: true } };
+            }
+            case "postMessage": {
+              const idx = data.requests.findIndex((r) => r.id === body.id);
+              if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
+              const cur = data.requests[idx];
+              // a client may only post to its own request; admin may post to any
+              if (!adminOk && (!client || cur.clientId !== client.clientId))
+                return { code: 403, obj: { ok: false, error: "not your request" } };
+              const text = String(body.text || "").trim();
+              if (!text) return { code: 400, obj: { ok: false, error: "empty message" } };
+              cur.meta = cur.meta || { activity: [] };
+              cur.meta.thread = (cur.meta.thread || []).concat([{ at: now(), from: adminOk ? "team" : "client", text }]);
+              data.requests[idx] = mergePatch(cur, {}, now());
+              return { code: 200, obj: { ok: true, request: data.requests[idx] } };
             }
             case "promoteEvent": {
               const ev = data.events.find((e) => e.eventId === body.eventId);
