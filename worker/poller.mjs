@@ -46,8 +46,10 @@ export async function runOnce({
   // Social posts (post / event-promo) auto-publish via the deterministic shipper
   // in plain Node. Any other approved work (e.g. a website apply) stays with the
   // Claude drain, which never publishes to social (Skill(post) stays denied).
-  const socialShips = jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type));
-  const drainShips = jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type));
+  // Only divert social posts to the shipper when one is injected; otherwise every
+  // approved item goes to the drain (old behavior), so nothing is silently dropped.
+  const socialShips = shipper ? jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type)) : [];
+  const drainShips = shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships;
 
   let drainResult = { drafted: 0, shipped: 0 };
   if (jobs.drafts.length || drainShips.length) {

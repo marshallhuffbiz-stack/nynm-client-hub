@@ -62,18 +62,21 @@ export async function shipRequest(req, { client, integrations, postiz, now, repo
       mediaUrl = media;
     } else {
       const up = await postiz.upload(resolvePath(repoRoot, media));
-      mediaUrl = (up && up.url) || up;
+      mediaUrl = up && up.url;
       if (!mediaUrl) return { ok: false, error: "Image upload to Postiz returned no URL." };
     }
   } catch (e) {
     return { ok: false, error: "Image upload failed: " + (e && e.message ? e.message : String(e)) };
   }
 
+  // Publish each channel independently: a failure on one channel must not discard
+  // the channels that already succeeded (else a retry would double-post them).
   const times = publishTimes(channels.length, { scheduledFor: draft.scheduledFor, now });
   const postIds = [];
-  try {
-    for (let i = 0; i < channels.length; i++) {
-      const ch = channels[i];
+  const failures = [];
+  for (let i = 0; i < channels.length; i++) {
+    const ch = channels[i];
+    try {
       const r = await postiz.createPost({
         caption: draft.caption || "",
         mediaUrl,
@@ -82,12 +85,18 @@ export async function shipRequest(req, { client, integrations, postiz, now, repo
         settings: { post_type: "post" },
       });
       postIds.push({ channel: ch.identifier, integrationId: ch.id, postId: (r && r.postId) || r, at: times[i] });
+    } catch (e) {
+      failures.push({ channel: ch.identifier, error: e && e.message ? e.message : String(e) });
     }
-  } catch (e) {
-    return { ok: false, error: "Postiz publish failed: " + (e && e.message ? e.message : String(e)) };
   }
 
-  return { ok: true, channels: channels.map((c) => c.identifier), postIds };
+  // Nothing posted → safe to mark error and retry the whole request (no double-post).
+  if (postIds.length === 0) {
+    return { ok: false, error: "Postiz publish failed: " + (failures.map((f) => `${f.channel}: ${f.error}`).join("; ") || "unknown") };
+  }
+  // Some or all posted. Report any partial failures so the shipper can flag them
+  // WITHOUT re-posting the channels that already went out.
+  return { ok: true, channels: postIds.map((p) => p.channel), postIds, failures };
 }
 
 // The impure wrapper the poller injects. For each approved ("ship") request it:
@@ -100,6 +109,7 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
   return async ({ apiBase, adminToken, ships = [], clients = [] }) => {
     let shipped = 0;
     let failed = 0;
+    let skipped = 0;
     let integrations = [];
     try {
       integrations = (await fetchIntegrations()) || [];
@@ -110,7 +120,15 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
     for (const req of ships) {
       const tickNow = now();
       const client = (clients || []).find((c) => c.clientId === req.clientId) || { name: req.clientId };
-      await apiUpdate(apiBase, adminToken, req.id, { action: "ship" });
+
+      // Claim the row (approved -> shipping) BEFORE publishing. If this writeback
+      // does not commit, do NOT publish: leave it "approved" to retry next tick,
+      // so a failed claim can never lead to a double-post.
+      const claim = await apiUpdate(apiBase, adminToken, req.id, { action: "ship" });
+      if (!claim || claim.ok !== true) {
+        skipped += 1;
+        continue;
+      }
 
       let result;
       try {
@@ -120,11 +138,15 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
       }
 
       if (result.ok) {
+        const partial = (result.failures || []).filter(Boolean);
         await apiUpdate(apiBase, adminToken, req.id, {
           action: "done",
-          meta: { run: { status: "shipped", finishedAt: tickNow.toISOString(), channels: result.channels, postIds: result.postIds } },
+          meta: { run: { status: partial.length ? "shipped-partial" : "shipped", finishedAt: tickNow.toISOString(), channels: result.channels, postIds: result.postIds, failures: partial } },
         });
         if (notifier && notifier.notifyShipped) await notifier.notifyShipped({ req, channels: result.channels, postIds: result.postIds });
+        if (partial.length && notifier && notifier.notifyShipFailed) {
+          await notifier.notifyShipFailed({ req, error: "Some channels didn't post: " + partial.map((f) => f.channel).join(", ") });
+        }
         shipped += 1;
       } else {
         await apiUpdate(apiBase, adminToken, req.id, {
@@ -135,7 +157,7 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
         failed += 1;
       }
     }
-    return { shipped, failed };
+    return { shipped, failed, skipped };
   };
 }
 
@@ -158,6 +180,15 @@ function parseJsonTail(out, open) {
   return JSON.parse(out.slice(i));
 }
 
+// Build the `posts:create` argv. Flag order is irrelevant to the CLI, so -m is
+// appended LAST — the bug to avoid is inserting it between -c and its value,
+// which makes the CLI read "-m" as the caption.
+export function postsCreateArgs({ caption, mediaUrl, isoTime, integrationId, settings }) {
+  const args = ["posts:create", "-c", caption || "", "-s", isoTime, "-i", integrationId, "-t", "schedule", "--settings", JSON.stringify(settings || { post_type: "post" })];
+  if (mediaUrl) args.push("-m", mediaUrl);
+  return args;
+}
+
 export function makePostizClient() {
   return {
     async listIntegrations() {
@@ -168,10 +199,8 @@ export function makePostizClient() {
       const d = parseJsonTail(out, "{");
       return { url: d.path || d.url };
     },
-    async createPost({ caption, mediaUrl, isoTime, integrationId, settings }) {
-      const args = ["posts:create", "-c", caption, "-s", isoTime, "-i", integrationId, "-t", "schedule", "--settings", JSON.stringify(settings || { post_type: "post" })];
-      if (mediaUrl) args.splice(2, 0, "-m", mediaUrl);
-      const arr = parseJsonTail(await runPostiz(args), "[");
+    async createPost(opts) {
+      const arr = parseJsonTail(await runPostiz(postsCreateArgs(opts)), "[");
       return { postId: arr[0] && arr[0].postId };
     },
   };

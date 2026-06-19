@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveChannels, publishTimes, shipRequest, makeShipper } from "./publish.mjs";
+import { resolveChannels, publishTimes, shipRequest, makeShipper, postsCreateArgs } from "./publish.mjs";
 
 const NOW = new Date("2026-06-19T17:00:00Z");
 
@@ -47,6 +47,24 @@ test("publishTimes: past scheduledFor ignored → now+lead", () => {
   assert.deepEqual(t, ["2026-06-19T17:03:00.000Z"]);
 });
 
+// --- postsCreateArgs (regression guard for the -m/-c flag-corruption bug) ---
+
+test("postsCreateArgs: -c keeps the caption, -m appended (never between -c and its value)", () => {
+  const args = postsCreateArgs({ caption: "hello world", mediaUrl: "https://x.png", isoTime: "2026-06-19T17:03:00.000Z", integrationId: "fb1", settings: { post_type: "post" } });
+  assert.equal(args[args.indexOf("-c") + 1], "hello world");
+  assert.equal(args[args.indexOf("-m") + 1], "https://x.png");
+  assert.equal(args[args.indexOf("-i") + 1], "fb1");
+  assert.equal(args[args.indexOf("-s") + 1], "2026-06-19T17:03:00.000Z");
+  assert.ok(args.includes("schedule"));
+  assert.equal(args[args.indexOf("--settings") + 1], '{"post_type":"post"}');
+});
+
+test("postsCreateArgs: no media → no -m flag", () => {
+  const args = postsCreateArgs({ caption: "hi", isoTime: "t", integrationId: "fb1" });
+  assert.ok(!args.includes("-m"));
+  assert.equal(args[args.indexOf("-c") + 1], "hi");
+});
+
 // --- shipRequest ---
 
 function fakePostiz(opts = {}) {
@@ -61,6 +79,7 @@ function fakePostiz(opts = {}) {
     async createPost(a) {
       calls.posts.push(a);
       if (opts.postThrows) throw new Error("meta rejected");
+      if (opts.failOn && calls.posts.length === opts.failOn) throw new Error("meta rejected on channel " + opts.failOn);
       return { postId: "p" + calls.posts.length };
     },
   };
@@ -114,6 +133,16 @@ test("shipRequest: createPost throws → ok:false with error", async () => {
   assert.match(res.error, /meta rejected/);
 });
 
+test("shipRequest: one channel fails, the other succeeds → ok:true, partial failures, no full abort", async () => {
+  const pz = fakePostiz({ failOn: 2 }); // FB (call 1) succeeds, IG (call 2) throws
+  const res = await shipRequest(REQ, { client: CLIENT, integrations: INTEGRATIONS, postiz: pz, now: NOW, repoRoot: "/repo" });
+  assert.equal(res.ok, true);
+  assert.equal(res.postIds.length, 1);
+  assert.equal(res.postIds[0].channel, "facebook");
+  assert.equal(res.failures.length, 1);
+  assert.equal(res.failures[0].channel, "instagram");
+});
+
 // --- makeShipper ---
 
 function fakeApi() {
@@ -134,7 +163,7 @@ test("makeShipper: success writes ship→done with postIds + notifies", async ()
     repoRoot: "/repo",
   });
   const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
-  assert.deepEqual(res, { shipped: 1, failed: 0 });
+  assert.deepEqual(res, { shipped: 1, failed: 0, skipped: 0 });
   assert.equal(api.patches[0].patch.action, "ship");
   assert.equal(api.patches[1].patch.action, "done");
   assert.equal(api.patches[1].patch.meta.run.status, "shipped");
@@ -155,7 +184,7 @@ test("makeShipper: Postiz failure writes ship→error + notifies", async () => {
     repoRoot: "/repo",
   });
   const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
-  assert.deepEqual(res, { shipped: 0, failed: 1 });
+  assert.deepEqual(res, { shipped: 0, failed: 1, skipped: 0 });
   assert.equal(api.patches[0].patch.action, "ship");
   assert.equal(api.patches[1].patch.action, "error");
   assert.match(api.patches[1].patch.meta.run.error, /meta rejected/);
@@ -174,5 +203,16 @@ test("makeShipper: unknown client (not in clients list) → failed, no crash", a
     repoRoot: "/repo",
   });
   const res = await shipper({ apiBase: "b", adminToken: "A", ships: [{ ...REQ, clientId: "ghost" }], clients: [CLIENT] });
-  assert.deepEqual(res, { shipped: 0, failed: 1 });
+  assert.deepEqual(res, { shipped: 0, failed: 1, skipped: 0 });
+});
+
+test("makeShipper: ship-claim writeback fails → skipped, never publishes (no double-post)", async () => {
+  const pz = fakePostiz();
+  const patches = [];
+  const apiUpdate = async (b, t, id, patch) => { patches.push(patch.action); return patch.action === "ship" ? { ok: false } : { ok: true }; };
+  const shipper = makeShipper({ fetchIntegrations: async () => INTEGRATIONS, postiz: pz, apiUpdate, notifier: {}, now: () => NOW, repoRoot: "/repo" });
+  const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.deepEqual(res, { shipped: 0, failed: 0, skipped: 1 });
+  assert.deepEqual(patches, ["ship"]); // only the failed claim — no done/error, no publish
+  assert.equal(pz.calls.posts.length, 0);
 });
