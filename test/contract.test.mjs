@@ -132,3 +132,13 @@ test("deleteRequest removes a request (admin only); 404 for a missing id", async
   const missing = await post({ admin: "testadmin", action: "deleteRequest", id: "req_nope" });
   assert.equal(missing.status, 404);
 });
+
+test("addEvent stores an optional start time; bad time rejected", async () => {
+  const ev = await post({ c: "tok-o", action: "addEvent", event: { title: "Trivia night", date: "2026-07-10", time: "19:30" } });
+  assert.equal(ev.status, 200);
+  const cv = await get("?c=tok-o");
+  const row = cv.body.events.find((e) => e.eventId === ev.body.eventId);
+  assert.equal(row.time, "19:30");
+  const bad = await post({ c: "tok-o", action: "addEvent", event: { title: "x", date: "2026-07-10", time: "25:99" } });
+  assert.equal(bad.status, 400);
+});

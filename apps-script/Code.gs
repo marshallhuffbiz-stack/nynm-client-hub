@@ -36,7 +36,7 @@ var COLS_REQUESTS = [
 ];
 var COLS_EVENTS = [
   "eventId", "clientId", "title", "date", "description",
-  "promoted", "requestId", "createdAt", "updatedAt"
+  "promoted", "requestId", "createdAt", "updatedAt", "time"
 ];
 
 // Per-tab: which columns are JSON-encoded in the cell, and which are booleans.
@@ -282,11 +282,13 @@ function validateEventInput_(input) {
   if (!title) errors.push("title required");
   var date = String(input.date || "").trim();
   if (!isIsoDate_(date)) errors.push("date must be YYYY-MM-DD");
+  var time = String(input.time || "").trim(); // optional start time, "HH:MM" 24-hour
+  if (time && !/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) errors.push("time must be HH:MM (24-hour)");
   if (errors.length) return { ok: false, errors: errors };
   return {
     ok: true,
     errors: [],
-    value: { clientId: clientId, title: title, date: date, description: String(input.description || "").trim() }
+    value: { clientId: clientId, title: title, date: date, time: time, description: String(input.description || "").trim() }
   };
 }
 
@@ -554,6 +556,7 @@ function handleAddEvent_(body, client) {
     clientId: v.value.clientId,
     title: v.value.title,
     date: v.value.date,
+    time: v.value.time,
     description: v.value.description,
     promoted: false,
     requestId: "",
