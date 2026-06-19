@@ -2,6 +2,7 @@
 // Plain ES module, no build step. Talks to the shared API client.
 import { portalApi, fileToPayload } from "../shared/api.js";
 import { openLightbox } from "../shared/lightbox.js";
+import { computeIdeas, buildCampaign } from "../shared/ideas.js";
 
 /* ---------- token + api ---------- */
 
@@ -45,6 +46,8 @@ const evtSubmit = $("evt-submit");
 
 const requestsList = $("requests-list");
 const eventsList = $("events-list");
+const ideasSection = $("ideas-section");
+const ideasList = $("ideas-list");
 
 const toastEl = $("toast");
 
@@ -100,6 +103,8 @@ const TYPE_LABELS = {
 /* ---------- state ---------- */
 
 let selectedType = "post";
+// Proactive idea suggestions currently shown (index referenced by the action buttons).
+let currentIdeas = [];
 // Successfully uploaded attachments for the in-progress request: {name,url,mime}
 let pendingAttachments = [];
 // Files chosen but not yet uploaded (in case a selection is mid-upload on submit).
@@ -273,6 +278,27 @@ function renderEvents(events) {
         </div>
       </div>`;
   }).join("");
+}
+
+/* ---------- rendering: proactive ideas ---------- */
+
+function renderIdeas(data) {
+  currentIdeas = computeIdeas(data || {}, new Date());
+  if (!currentIdeas.length) {
+    ideasSection.classList.add("hidden");
+    ideasList.innerHTML = "";
+    return;
+  }
+  ideasSection.classList.remove("hidden");
+  ideasList.innerHTML = currentIdeas.map((idea, i) => `
+    <div class="card idea-card">
+      <div class="idea-title">${esc(idea.title)}</div>
+      <div class="idea-detail">${esc(idea.detail)}</div>
+      <div class="idea-actions">
+        <button type="button" class="btn sm primary" data-idea="${i}" data-act="use">Use this idea</button>
+        ${idea.campaign ? `<button type="button" class="btn sm" data-idea="${i}" data-act="campaign">Build the campaign</button>` : ""}
+      </div>
+    </div>`).join("");
 }
 
 /* ---------- rendering: attachment thumbnails ---------- */
@@ -565,6 +591,7 @@ function applyData(data) {
   document.title = `${name} · Relay`;
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
+  renderIdeas(data);
 }
 
 // Re-fetch the client's data and re-render the lists (used after submits).
@@ -699,6 +726,32 @@ requestsList.addEventListener("click", async (e) => {
   } catch (err) {
     toast("That didn't send. Please try again."); btn.disabled = false;
   }
+});
+
+// Proactive ideas: "Use this idea" pre-fills the request form; "Build the campaign" sends the 3-post pack.
+ideasList.addEventListener("click", async (e) => {
+  const btn = e.target.closest("[data-idea]");
+  if (!btn) return;
+  const idea = currentIdeas[Number(btn.getAttribute("data-idea"))];
+  if (!idea) return;
+  if (btn.getAttribute("data-act") === "use") {
+    selectType(idea.type || "post");
+    reqDesc.value = idea.postIdea || "";
+    requestForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    reqDesc.focus();
+    toast("Idea added below. Tweak it, then send.");
+    return;
+  }
+  const items = buildCampaign(idea);
+  if (!items.length) return;
+  if (!window.confirm(`Build the ${idea.label} campaign? This sends ${items.length} post requests (teaser, offer, day-of) to your team.`)) return;
+  btn.disabled = true;
+  let ok = 0;
+  for (const it of items) {
+    try { const res = await api.submit(it); if (res && res.ok) ok += 1; } catch (err) { /* keep going */ }
+  }
+  if (ok === items.length) { toast(`${idea.label} campaign sent. ${ok} posts queued.`); await refresh(); }
+  else { toast(`Sent ${ok} of ${items.length}. Please try the rest again.`); btn.disabled = false; }
 });
 
 // Default selection + initial load.

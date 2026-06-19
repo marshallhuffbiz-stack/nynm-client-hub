@@ -70,3 +70,9 @@
   margin-top: 2px; font-variant-numeric: tabular-nums;
 }
 .evt .evt-desc { color: var(--label-2); font-size: 15px; letter-spacing: -0.2px; margin-top: 7px; line-height: 1.38; }
+
+/* ===================== Proactive idea cards ===================== */
+.idea-card { padding: 14px 16px; }
+.idea-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); margin-bottom: 4px; }
+.idea-detail { color: var(--label-2); font-size: 15px; letter-spacing: -0.2px; line-height: 1.4; }
+.idea-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
