@@ -1,6 +1,7 @@
 // Relay Desk — Marshall's internal control panel for all client requests.
 // Plain ES module. Talks to the shared API client (mock locally, Apps Script in prod).
 import { deskApi } from "../shared/api.js";
+import { API_MODE } from "../shared/config.js";
 import { openLightbox, makeZoomable } from "../shared/lightbox.js";
 
 // Trash glyph for the per-request delete control (inline SVG, no icon font / emoji).
@@ -532,10 +533,13 @@ function commentActions(r) {
   wrap.append(el("div", { class: "btn-row" }, sendBtn, saveBtn));
 
   // Dev stand-in: run the whole loop so the draft can be demoed without the worker.
-  const devBtn = el("button", { type: "button", class: "btn ghost sm dev" }, "▸ Simulate draft (dev)");
-  devBtn.addEventListener("click", () => simulateDraft(r, ta.value));
-  wrap.append(devBtn);
-  wrap.append(el("div", { class: "dev-note" }, "Dev stand-in: the real worker stages the draft. This fakes it so the review loop can be tried out."));
+  // Mock mode only — never render this on the live Desk.
+  if (API_MODE === "mock") {
+    const devBtn = el("button", { type: "button", class: "btn ghost sm dev" }, "▸ Simulate draft (dev)");
+    devBtn.addEventListener("click", () => simulateDraft(r, ta.value));
+    wrap.append(devBtn);
+    wrap.append(el("div", { class: "dev-note" }, "Dev stand-in: the real worker stages the draft. This fakes it so the review loop can be tried out."));
+  }
 
   return wrap;
 }
@@ -627,9 +631,42 @@ function errorActions(r) {
   return wrap;
 }
 
+// Format channel ids ("facebook","instagram") for display: FB first, title-cased,
+// joined with " + ". Shared by the draft preview head + the done card.
+function fmtChannels(channels) {
+  const order = { facebook: 0, instagram: 1 };
+  const names = { facebook: "Facebook", instagram: "Instagram" };
+  return (channels || [])
+    .slice()
+    .sort((a, b) => (order[a] ?? 9) - (order[b] ?? 9))
+    .map((c) => names[c] || (c ? c[0].toUpperCase() + c.slice(1) : c))
+    .join(" + ");
+}
+
+function fmtWhen(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  return new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 function doneActions(r) {
-  return el("div", { class: "act" },
-    el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode("Done")));
+  const run = (r.meta && r.meta.run) || {};
+  const where = fmtChannels(Array.isArray(run.channels) ? run.channels : []);
+  if (!where) {
+    // Non-social done (e.g. a website apply) or an older row without run.channels.
+    return el("div", { class: "act" },
+      el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode("Done")));
+  }
+  const wrap = el("div", { class: "act stack" });
+  const when = run.finishedAt ? fmtWhen(run.finishedAt) : "";
+  wrap.append(el("div", { class: "statusline go" }, el("span", { class: "dot" }),
+    document.createTextNode(`Published to ${where}${when ? ` · ${when}` : ""}`)));
+  if (run.status === "shipped-partial" && Array.isArray(run.failures) && run.failures.length) {
+    wrap.append(el("div", { class: "notebox" }, el("strong", {}, "Heads up: "),
+      document.createTextNode("Didn't post to " + run.failures.map((f) => f.channel).join(", ") + " — handle those manually.")));
+  }
+  wrap.append(el("a", { href: "https://postiz.notyournormalmarketing.com/launches", target: "_blank", rel: "noopener", class: "kv link" }, "View in Postiz →"));
+  return wrap;
 }
 
 // Drive "view" URLs (.../d/FILEID/view) aren't embeddable in <img>; convert to
@@ -648,11 +685,14 @@ function driveEmbed(url, size = "w1200") {
 function readyActions(r) {
   const wrap = el("div", { class: "act" });
   const d = r.draft || {};
+  const channelLabel = d.channel
+    ? fmtChannels(String(d.channel).split(/[,+]/).map((s) => s.trim().toLowerCase()).filter(Boolean))
+    : "";
 
   const panel = el("div", { class: "draft" });
   panel.append(el("div", { class: "draft-head" },
     document.createTextNode("Staged draft"),
-    d.channel ? el("span", {}, d.channel) : false
+    channelLabel ? el("span", {}, channelLabel) : false
   ));
 
   const body = el("div", { class: "draft-body" });
@@ -667,18 +707,24 @@ function readyActions(r) {
 
   const kv = el("div", { class: "draft-meta" });
   if (d.preview) kv.append(el("div", { class: "kv" }, el("b", {}, "Preview: "), document.createTextNode(d.preview)));
-  if (d.channel) kv.append(el("div", { class: "kv" }, el("b", {}, "Channel: "), document.createTextNode(d.channel)));
-  const sched = fmtSchedule(r.scheduledFor);
+  if (channelLabel) kv.append(el("div", { class: "kv" }, el("b", {}, "Channel: "), document.createTextNode(channelLabel)));
+  const sched = fmtSchedule(d.scheduledFor || r.scheduledFor);
   if (sched) kv.append(el("div", { class: "kv" }, el("b", {}, "Scheduled: "), document.createTextNode(sched)));
   if (kv.children.length) body.append(kv);
   if (d.summary) body.append(el("div", { class: "draft-summary" }, d.summary));
   panel.append(body);
   wrap.append(panel);
 
-  const approve = el("button", { type: "button", class: "btn go" }, "Approve");
+  const isSocial = r.type === "post" || r.type === "event-promo";
+  const approve = el("button", { type: "button", class: "btn go" }, isSocial ? "Approve & publish" : "Approve");
   approve.addEventListener("click", async () => {
+    if (isSocial) {
+      const clientName = (state.clientById[r.clientId] && state.clientById[r.clientId].name) || r.clientId;
+      const where = channelLabel || "Facebook + Instagram";
+      if (!window.confirm(`Approve and publish to ${clientName}'s ${where}? This goes live automatically.`)) return;
+    }
     const res = await call(() => api.update(r.id, { action: "approve" }));
-    if (res) { applyRequest(res.request); toast("Approved."); render(); }
+    if (res) { applyRequest(res.request); toast(isSocial ? "Approved — publishing." : "Approved."); render(); }
   });
 
   const changes = el("button", { type: "button", class: "btn ghost" }, "Request changes");
