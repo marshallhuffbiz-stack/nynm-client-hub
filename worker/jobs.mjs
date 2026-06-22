@@ -10,7 +10,10 @@ export function detectJobs(requests = [], caps = { draft: 5, ship: 5 }) {
     else if (r.stage === "approved") ships.push(r);
     else if (r.stage === "submitted" && !(r.meta && r.meta.notified)) newSubmits.push(r);
   }
-  return { drafts: drafts.slice(0, caps.draft), ships: ships.slice(0, caps.ship), newSubmits };
+  // Ships are returned UNCAPPED: the poller splits them into social (auto-publish)
+  // vs drain lanes and caps each lane independently, so a backlog of one type can't
+  // starve the other. Drafts are still capped here (single lane).
+  return { drafts: drafts.slice(0, caps.draft), ships, newSubmits };
 }
 
 // True if the daily digest is due: now is past `hour` today and we haven't sent

@@ -120,6 +120,23 @@ test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + no
   assert.match(row.meta.run.error, /Out of space/);
 });
 
+test("preflightDisk leaves an in-flight 'drafting' row alone (only flags 'queued')", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "drafting guard test" } }),
+  }).then((r) => r.json());
+  const id = created.id;
+  await apiUpdate(base, "A", id, { action: "send" });  // submitted -> queued
+  await apiUpdate(base, "A", id, { action: "start" }); // queued -> drafting (a live drain owns it)
+  const low = await preflightDisk({
+    apiBase: base, adminToken: "A", minFreeBytes: 2 * 1024 ** 3, dir: ".",
+    statfsFn: async () => ({ bavail: 25_600, bsize: 4096 }), notifier: {},
+  });
+  assert.equal(low.ok, false);
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(all.requests.find((r) => r.id === id).stage, "drafting"); // untouched
+});
+
 test("drainArgs pins the model when configured, omits --model otherwise", () => {
   assert.deepEqual(
     drainArgs({ drainPrompt: "P", settingsPath: "/s.json", model: "claude-opus-4-8" }),

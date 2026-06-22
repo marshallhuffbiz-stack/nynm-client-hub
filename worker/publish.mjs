@@ -19,12 +19,27 @@ const isRemote = (u) => typeof u === "string" && /^(https?:|data:)/i.test(u);
 const CHANNEL_ORDER = { facebook: 0, instagram: 1 };
 const channelRank = (id) => (id in CHANNEL_ORDER ? CHANNEL_ORDER[id] : 9);
 
+// Normalize a customer/client name for matching — trim + lowercase so trailing
+// spaces or case drift between the Hub and Postiz don't silently yield zero channels.
+const normName = (s) => String(s == null ? "" : s).trim().toLowerCase();
+
 // The Postiz integrations a client publishes to: connected (not disabled) channels
-// whose customer name matches the client's name. Sorted FB-first.
+// whose customer name matches the client's name (normalized). Sorted FB-first and
+// de-duped to one channel per platform.
 export function resolveChannels(integrations = [], clientName) {
-  return (integrations || [])
-    .filter((i) => i && !i.disabled && i.customer && i.customer.name === clientName)
+  const want = normName(clientName);
+  if (!want) return [];
+  const matched = (integrations || [])
+    .filter((i) => i && !i.disabled && i.customer && normName(i.customer.name) === want)
     .sort((a, b) => channelRank(a.identifier) - channelRank(b.identifier));
+  const seen = new Set();
+  const unique = [];
+  for (const i of matched) {
+    if (seen.has(i.identifier)) continue;
+    seen.add(i.identifier);
+    unique.push(i);
+  }
+  return unique;
 }
 
 // Publish times for `count` channels. Base = draft.scheduledFor if it's a valid
@@ -137,21 +152,33 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
         result = { ok: false, error: e && e.message ? e.message : String(e) };
       }
 
+      // Preserve the row's existing meta (client<->team thread, activity log, the
+      // notified flag) — the backend overlays the whole meta object, so a bare
+      // meta:{run} would wipe everything else.
+      const baseMeta = (req && req.meta) || {};
       if (result.ok) {
         const partial = (result.failures || []).filter(Boolean);
-        await apiUpdate(apiBase, adminToken, req.id, {
+        const donePatch = {
           action: "done",
-          meta: { run: { status: partial.length ? "shipped-partial" : "shipped", finishedAt: tickNow.toISOString(), channels: result.channels, postIds: result.postIds, failures: partial } },
-        });
+          meta: { ...baseMeta, run: { status: partial.length ? "shipped-partial" : "shipped", finishedAt: tickNow.toISOString(), channels: result.channels, postIds: result.postIds, failures: partial } },
+        };
+        // The post is already scheduled in Postiz here; we only need the row to read
+        // "done". Retry the writeback once so a transient blip can't wedge it at
+        // "shipping" while notifyShipped has already told Marshall it's live.
+        let doneRes = await apiUpdate(apiBase, adminToken, req.id, donePatch);
+        if (!doneRes || doneRes.ok !== true) doneRes = await apiUpdate(apiBase, adminToken, req.id, donePatch);
         if (notifier && notifier.notifyShipped) await notifier.notifyShipped({ req, channels: result.channels, postIds: result.postIds });
         if (partial.length && notifier && notifier.notifyShipFailed) {
           await notifier.notifyShipFailed({ req, error: "Some channels didn't post: " + partial.map((f) => f.channel).join(", ") });
+        }
+        if (!doneRes || doneRes.ok !== true) {
+          console.error(`[shipper] ${req.id} published but the done-writeback failed twice — row may sit at "shipping" until reconciled.`);
         }
         shipped += 1;
       } else {
         await apiUpdate(apiBase, adminToken, req.id, {
           action: "error",
-          meta: { run: { status: "error", error: result.error, finishedAt: tickNow.toISOString() } },
+          meta: { ...baseMeta, run: { status: "error", error: result.error, finishedAt: tickNow.toISOString() } },
         });
         if (notifier && notifier.notifyShipFailed) await notifier.notifyShipFailed({ req, error: result.error });
         failed += 1;

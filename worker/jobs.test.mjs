@@ -24,6 +24,12 @@ test("detectJobs respects caps", () => {
   assert.equal(j.drafts.length, 3);
 });
 
+test("detectJobs returns ships UNCAPPED (poller caps per lane to avoid starvation)", () => {
+  const reqs = Array.from({ length: 8 }, (_, i) => ({ id: "a" + i, stage: "approved" }));
+  const j = detectJobs(reqs, { draft: 5, ship: 5 });
+  assert.equal(j.ships.length, 8);
+});
+
 test("shouldRunDigest fires once per day after the hour", () => {
   const now = new Date(2026, 5, 17, 9, 0); // 9am local
   assert.equal(shouldRunDigest(null, now, 8), true); // never run, past 8

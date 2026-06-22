@@ -1,7 +1,14 @@
 // Thin API client for the worker (Node side). Talks to the same token-gated
 // endpoint as the browser, with the admin token.
 export async function fetchJson(url, opts) {
-  const res = await fetch(url, opts);
+  let res;
+  try {
+    res = await fetch(url, opts);
+  } catch (e) {
+    // Network failure (DNS, offline, reset). Fail soft so a single bad call
+    // can't throw out of a ship/draft batch and abort the rest of the tick.
+    return { ok: false, status: 0, error: "network error: " + (e && e.message ? e.message : String(e)) };
+  }
   let data;
   try {
     data = await res.json();

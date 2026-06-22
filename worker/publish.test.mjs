@@ -30,6 +30,22 @@ test("resolveChannels: no match → empty", () => {
   assert.deepEqual(resolveChannels(INTEGRATIONS, "Nobody"), []);
 });
 
+test("resolveChannels: trims + case-insensitive, de-dupes per platform", () => {
+  const ints = [
+    { id: "fb1", identifier: "facebook", disabled: false, customer: { name: "Eats on 601" } },
+    { id: "fb2", identifier: "facebook", disabled: false, customer: { name: "Eats on 601" } },
+    { id: "ig1", identifier: "instagram", disabled: false, customer: { name: "Eats on 601" } },
+  ];
+  const ch = resolveChannels(ints, "  eats on 601 "); // trailing space + wrong case
+  assert.deepEqual(ch.map((c) => c.identifier), ["facebook", "instagram"]);
+  assert.equal(ch.length, 2);
+});
+
+test("resolveChannels: blank client name → no channels (fail closed)", () => {
+  assert.deepEqual(resolveChannels(INTEGRATIONS, ""), []);
+  assert.deepEqual(resolveChannels(INTEGRATIONS, "   "), []);
+});
+
 // --- publishTimes ---
 
 test("publishTimes: empty scheduledFor → now+lead, staggered", () => {
@@ -215,4 +231,27 @@ test("makeShipper: ship-claim writeback fails → skipped, never publishes (no d
   assert.deepEqual(res, { shipped: 0, failed: 0, skipped: 1 });
   assert.deepEqual(patches, ["ship"]); // only the failed claim — no done/error, no publish
   assert.equal(pz.calls.posts.length, 0);
+});
+
+test("makeShipper: preserves existing meta (thread/activity/notified) on done", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz();
+  const reqWithMeta = { ...REQ, meta: { thread: [{ from: "client", text: "hi" }], activity: [{ kind: "created" }], notified: true } };
+  const shipper = makeShipper({ fetchIntegrations: async () => INTEGRATIONS, postiz: pz, apiUpdate: api.apiUpdate, notifier: {}, now: () => NOW, repoRoot: "/repo" });
+  await shipper({ apiBase: "b", adminToken: "A", ships: [reqWithMeta], clients: [CLIENT] });
+  const done = api.patches.find((p) => p.patch.action === "done");
+  assert.ok(done.patch.meta.thread, "thread preserved");
+  assert.ok(done.patch.meta.activity, "activity preserved");
+  assert.equal(done.patch.meta.notified, true);
+  assert.equal(done.patch.meta.run.status, "shipped");
+});
+
+test("makeShipper: retries the done writeback once if it fails (no wedge, still shipped)", async () => {
+  const pz = fakePostiz();
+  const calls = [];
+  const apiUpdate = async (b, t, id, patch) => { calls.push(patch.action); return patch.action === "done" ? { ok: false } : { ok: true }; };
+  const shipper = makeShipper({ fetchIntegrations: async () => INTEGRATIONS, postiz: pz, apiUpdate, notifier: {}, now: () => NOW, repoRoot: "/repo" });
+  const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.equal(calls.filter((a) => a === "done").length, 2, "done retried once");
+  assert.equal(res.shipped, 1); // the post DID publish, so it still counts shipped
 });

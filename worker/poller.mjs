@@ -48,8 +48,11 @@ export async function runOnce({
   // Claude drain, which never publishes to social (Skill(post) stays denied).
   // Only divert social posts to the shipper when one is injected; otherwise every
   // approved item goes to the drain (old behavior), so nothing is silently dropped.
-  const socialShips = shipper ? jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type)) : [];
-  const drainShips = shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships;
+  // Cap each lane independently (ships arrive uncapped from detectJobs) so a backlog
+  // of website/other approved work can't starve social auto-publishing, and vice versa.
+  const shipCap = (caps && caps.ship) || 5;
+  const socialShips = (shipper ? jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type)) : []).slice(0, shipCap);
+  const drainShips = (shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships).slice(0, shipCap);
 
   let drainResult = { drafted: 0, shipped: 0 };
   if (jobs.drafts.length || drainShips.length) {
@@ -139,7 +142,10 @@ export async function preflightDisk({
   let marked = 0;
   try {
     const all = await fetchAll(apiBase, adminToken);
-    const blocked = ((all && all.requests) || []).filter((r) => r.stage === "queued" || r.stage === "drafting");
+    // Only flag "queued" rows — never "drafting". A drafting row is being actively
+    // rendered by a live drain from a prior tick; flagging it as error would make
+    // that drain's later "ready" writeback an illegal transition and lose the draft.
+    const blocked = ((all && all.requests) || []).filter((r) => r.stage === "queued");
     const msg = `Out of space on the worker machine (${freeMB} MB free). Free disk space, then tap Retry.`;
     for (const r of blocked) {
       const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: msg } };
@@ -184,6 +190,7 @@ async function stateGetSet() {
 // CLI entry (launchd runs this). pathToFileURL handles paths with spaces/encoding.
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const lock = join(HERE, ".lock");
+  let weWroteLock = false;
   try {
     const cfg = await loadConfig();
     // Pre-flight: if the disk is too low to render, surface it + skip (don't strand a request mid-render).
@@ -211,6 +218,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     }
     await mkdir(HERE, { recursive: true });
     await writeFile(lock, String(process.pid));
+    weWroteLock = true;
     const { getLastDigest, setLastDigest } = await stateGetSet();
     const notifier = makeNotifier(cfg);
     const postiz = makePostizClient();
@@ -229,6 +237,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   } catch (e) {
     console.error("poller error:", e.message);
   } finally {
-    try { unlinkSync(lock); } catch {}
+    // Only remove the lock if THIS process wrote it — an early throw (e.g. bad
+    // config) must never delete a lock held by another live drain.
+    if (weWroteLock) { try { unlinkSync(lock); } catch {} }
   }
 }
