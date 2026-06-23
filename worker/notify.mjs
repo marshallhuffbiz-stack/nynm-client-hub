@@ -72,5 +72,16 @@ export function makeNotifier(config = {}) {
       await macNotify(title, msg);
       await pushNotify(push, title, msg);
     },
+    async notifyAutoEvent({ entry, scheduledFor, site }) {
+      const title = "Relay — event auto-scheduled";
+      const siteMsg = site && site.ok ? (site.changed ? "added to the website" : "already on the website") : "website update needs a look";
+      let when = "";
+      try {
+        when = scheduledFor ? new Date(scheduledFor).toLocaleString("en-US", { timeZone: "America/New_York", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+      } catch {}
+      const msg = `${entry.title} (${entry.date}): ${siteMsg}; day-of post scheduled${when ? ` for ${when} ET` : ""}. Cancel in Postiz if needed.`;
+      await macNotify(title, msg);
+      await pushNotify(push, title, msg);
+    },
   };
 }

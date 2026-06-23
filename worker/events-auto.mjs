@@ -19,6 +19,13 @@ export function eventKey(clientId, ymd, title) {
   return `${clientId}|${ymd}|${slugify(title)}`;
 }
 
+// Cheap pre-filter: does this text plausibly name a date? Used to gate the (costly)
+// Opus extraction so we don't spend a model call on obviously date-less requests.
+const DATE_HINT = /\b(jan(uary)?|feb(ruary)?|mar(ch)?|apr(il)?|may|jun(e)?|jul(y)?|aug(ust)?|sept?(ember)?|oct(ober)?|nov(ember)?|dec(ember)?|mon(day)?|tue(s|sday)?|wed(nesday)?|thu(r|rs|rsday)?|fri(day)?|sat(urday)?|sun(day)?|today|tonight|tomorrow|this\s+(week|weekend)|next\s+(week|weekend)|\d{1,2}\s*\/\s*\d{1,2}|\b\d{1,2}(st|nd|rd|th)\b|\d{4}-\d{2}-\d{2})\b/i;
+export function mightHaveDate(text) {
+  return DATE_HINT.test(String(text || ""));
+}
+
 // Day-of-month of the Nth Sunday of a month (month0 = 0-indexed).
 function nthSunday(year, month0, n) {
   const first = new Date(Date.UTC(year, month0, 1));

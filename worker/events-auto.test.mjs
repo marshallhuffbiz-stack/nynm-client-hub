@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { slugify, eventKey, etOffset, etIso, dayOfPostIso, isConfident, buildSiteEvent, mergeSiteEvents } from "./events-auto.mjs";
+import { slugify, eventKey, etOffset, etIso, dayOfPostIso, isConfident, buildSiteEvent, mergeSiteEvents, mightHaveDate } from "./events-auto.mjs";
 
 const NOW = new Date("2026-06-22T12:00:00Z");
 
@@ -40,6 +40,16 @@ test("isConfident: needs a title + a valid today-or-future date + not flagged lo
   assert.equal(isConfident({ ...base, hasDate: false }, NOW), false);
   assert.equal(isConfident({ ...base, title: "  " }, NOW), false); // no title
   assert.equal(isConfident(null, NOW), false);
+});
+
+test("mightHaveDate: catches months/weekdays/relative/numeric, ignores date-less text", () => {
+  assert.equal(mightHaveDate("AP Southern Kitchen on the lot Saturday June 28, 11-4"), true);
+  assert.equal(mightHaveDate("food truck this weekend"), true);
+  assert.equal(mightHaveDate("special on the 28th"), true);
+  assert.equal(mightHaveDate("tacos 6/28"), true);
+  assert.equal(mightHaveDate("event on 2026-06-28"), true);
+  assert.equal(mightHaveDate("Can you make our logo bigger and the hours clearer?"), false);
+  assert.equal(mightHaveDate(""), false);
 });
 
 test("buildSiteEvent: vendor-day entry with stable id, display date, ISO, meta", () => {

@@ -14,6 +14,9 @@ import { digestSummary } from "../core/model.mjs";
 import { apiFetchAll, apiUpdate } from "./writeback.mjs";
 import { makeNotifier } from "./notify.mjs";
 import { makeShipper, makePostizClient } from "./publish.mjs";
+import { makeAutoEvents } from "./auto-events.mjs";
+import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
+import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -27,6 +30,7 @@ export async function runOnce({
   caps = { draft: 5, ship: 5 },
   drainer,
   shipper,
+  autoEvents,
   notifier,
   digestHour = 8,
   getLastDigest,
@@ -38,7 +42,19 @@ export async function runOnce({
   const reqs = all.requests || [];
   const jobs = detectJobs(reqs, caps);
 
+  // Eats on 601 date automation: dated requests -> website entry + a fully-auto day-of
+  // post. Runs against the live backend; the auto-queued ids are skipped below so they
+  // aren't also notified as brand-new.
+  let autoRes = { queued: 0, skipped: 0, queuedIds: [] };
+  let autoApproveRes = { approved: 0 };
+  if (autoEvents) {
+    autoRes = (await autoEvents.process({ apiBase, adminToken, requests: reqs })) || autoRes;
+    autoApproveRes = (await autoEvents.autoApprove({ apiBase, adminToken, requests: reqs })) || autoApproveRes;
+  }
+  const autoQueued = new Set(autoRes.queuedIds || []);
+
   for (const r of jobs.newSubmits) {
+    if (autoQueued.has(r.id)) continue; // auto-event already handled this tick
     await notifier.notifyNew(r);
     await apiUpdate(apiBase, adminToken, r.id, { meta: { ...(r.meta || {}), notified: true } });
   }
@@ -79,6 +95,8 @@ export async function runOnce({
     drafted: drainResult.drafted || 0,
     published: shipResult.shipped || 0,
     shipFailed: shipResult.failed || 0,
+    autoQueued: autoRes.queued || 0,
+    autoApproved: autoApproveRes.approved || 0,
   };
 }
 
@@ -222,12 +240,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     const { getLastDigest, setLastDigest } = await stateGetSet();
     const notifier = makeNotifier(cfg);
     const postiz = makePostizClient();
+
+    // Eats on 601 date automation — only wired when config.autoEvents.enabled is true
+    // and the site dir is configured (stays dormant otherwise).
+    let autoEvents = null;
+    const ae = cfg.autoEvents;
+    if (ae && ae.enabled && ae.siteDir && ae.clientId) {
+      const runClaude = makeRunClaude({ claudeBin: cfg.claudeBin || "claude", model: cfg.model });
+      const extract = makeExtractor({
+        runClaude,
+        today: () => new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" }),
+      });
+      const git = makeGit(ae.siteDir);
+      const io = makeEventsIO(ae.siteDir);
+      autoEvents = makeAutoEvents({
+        autoClientId: ae.clientId,
+        extract,
+        syncSite: (entry) => syncSiteEvent({ entry, git, io }),
+        apiUpdate,
+        notifier,
+      });
+    }
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
       drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
+      autoEvents,
       notifier,
       digestHour: cfg.digestHour ?? 8,
       getLastDigest,
