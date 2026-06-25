@@ -3,13 +3,64 @@
 import { portalApi, fileToPayload } from "../shared/api.js";
 import { openLightbox } from "../shared/lightbox.js";
 import { computeIdeas, buildCampaign } from "../shared/ideas.js";
+import { resolveAccess, persistAccess, PORTAL_TOKEN_KEY, PORTAL_PIN_KEY } from "../shared/token.js";
+import { installLaunchManifest } from "../shared/pwa.js";
 
 /* ---------- token + api ---------- */
 
-const params = new URLSearchParams(location.search);
-const token = params.get("c") || "";
-let pin = "";
-let api = portalApi(token);
+// localStorage, but never throw (Safari private mode / blocked storage).
+function safeLocalStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
+
+// The token lives in ?c=… , but an installed home-screen app relaunches the
+// manifest's start_url with no query string. Resolve from the URL first, then
+// durable storage, so the installed app self-heals instead of dead-ending on
+// "This link isn't valid." (Root-cause fix for the home-screen launch bug.)
+const access = resolveAccess({
+  search: location.search,
+  storage: safeLocalStorage(),
+  param: "c",
+  pinParam: "pin",
+  tokenKey: PORTAL_TOKEN_KEY,
+  pinKey: PORTAL_PIN_KEY,
+});
+const token = access.token;
+let pin = access.pin || "";
+let api = portalApi(token, pin);
+
+// Recovered from storage (no ?c= in the URL) → put it back in the address bar so
+// reloads and the dynamic manifest both see it.
+if (token && access.source === "storage") {
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set("c", token);
+    history.replaceState(null, "", u.href);
+  } catch { /* non-fatal */ }
+}
+
+// Persist a verified token so future launches survive a dropped query string.
+function rememberAccess() {
+  persistAccess(safeLocalStorage(), { token, pin, tokenKey: PORTAL_TOKEN_KEY, pinKey: PORTAL_PIN_KEY });
+}
+
+// Replace the static manifest with one whose start_url carries the token, so
+// "Add to Home Screen" records a launch link that reopens the correct portal.
+async function setupLaunchManifest(tok) {
+  try {
+    const link = document.querySelector('link[rel="manifest"]');
+    const manifestHref = new URL(link ? link.getAttribute("href") : "./manifest.webmanifest", location.href).href;
+    let base;
+    try {
+      base = await (await fetch(manifestHref, { cache: "no-store" })).json();
+    } catch {
+      base = { name: "Relay by Not Your Normal Marketing", short_name: "Relay", display: "standalone", background_color: "#F2F2F7", theme_color: "#F2F2F7" };
+    }
+    installLaunchManifest({ doc: document, base, href: location.href, manifestHref, param: "c", token: tok });
+  } catch { /* non-fatal: the storage-restore layer still recovers the token */ }
+}
+
+if (token) setupLaunchManifest(token);
 
 /* ---------- element refs ---------- */
 
@@ -629,6 +680,7 @@ async function start() {
   }
 
   // Good.
+  rememberAccess();
   applyData(res);
   showView("app");
 }
@@ -663,6 +715,7 @@ async function onPinSubmit(event) {
   btn.textContent = "Open portal";
 
   if (res && res.ok) {
+    rememberAccess();
     errorEl.classList.add("hidden");
     applyData(res);
     showView("app");

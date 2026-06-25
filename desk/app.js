@@ -3,6 +3,8 @@
 import { deskApi } from "../shared/api.js";
 import { API_MODE } from "../shared/config.js";
 import { openLightbox, makeZoomable } from "../shared/lightbox.js";
+import { resolveAccess, persistAccess, DESK_TOKEN_KEY } from "../shared/token.js";
+import { installLaunchManifest } from "../shared/pwa.js";
 
 // Trash glyph for the per-request delete control (inline SVG, no icon font / emoji).
 const TRASH_SVG =
@@ -11,8 +13,51 @@ const TRASH_SVG =
   '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>' +
   '<path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
 
-const adminToken = new URLSearchParams(location.search).get("k") || "";
+// localStorage, but never throw (private mode / blocked storage).
+function safeLocalStorage() {
+  try { return window.localStorage; } catch { return null; }
+}
+
+// The admin token lives in ?k=… , but an installed home-screen app relaunches
+// start_url with no query string. Resolve from the URL first, then durable
+// storage, so the installed Desk self-heals instead of dead-ending.
+const _access = resolveAccess({
+  search: location.search,
+  storage: safeLocalStorage(),
+  param: "k",
+  tokenKey: DESK_TOKEN_KEY,
+});
+const adminToken = _access.token;
 const api = deskApi(adminToken);
+
+// Recovered from storage → put it back in the address bar.
+if (adminToken && _access.source === "storage") {
+  try {
+    const u = new URL(location.href);
+    u.searchParams.set("k", adminToken);
+    history.replaceState(null, "", u.href);
+  } catch { /* non-fatal */ }
+}
+
+function rememberAccess() {
+  persistAccess(safeLocalStorage(), { token: adminToken, tokenKey: DESK_TOKEN_KEY });
+}
+
+// Make "Add to Home Screen" capture a launch link that carries the token.
+async function setupLaunchManifest(tok) {
+  try {
+    const link = document.querySelector('link[rel="manifest"]');
+    const manifestHref = new URL(link ? link.getAttribute("href") : "./manifest.webmanifest", location.href).href;
+    let base;
+    try {
+      base = await (await fetch(manifestHref, { cache: "no-store" })).json();
+    } catch {
+      base = { name: "Relay Desk · Not Your Normal Marketing", short_name: "Relay Desk", display: "standalone", background_color: "#F2F2F7", theme_color: "#F2F2F7" };
+    }
+    installLaunchManifest({ doc: document, base, href: location.href, manifestHref, param: "k", token: tok });
+  } catch { /* non-fatal: storage-restore still recovers the token */ }
+}
+if (adminToken) setupLaunchManifest(adminToken);
 
 // ---------- tiny DOM helpers ----------
 const $ = (sel, root = document) => root.querySelector(sel);
@@ -216,6 +261,7 @@ async function loadInitial() {
   try { res = await api.load(); }
   catch { res = { ok: false, error: "network" }; }
   if (!res || res.status === 403 || res.ok === false) return showBadToken();
+  rememberAccess();
   ingest(res);
   showApp();
   render();
