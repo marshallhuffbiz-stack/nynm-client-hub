@@ -560,6 +560,16 @@ function handleSubmitRequest_(body, client) {
   // Tenant FORCED from the auth'd client token; a body clientId is honored only for
   // admin. Stops one client's token from planting a request into another tenant.
   input.clientId = adminOk ? ((body.request && body.request.clientId) || (client && client.clientId)) : (client && client.clientId);
+  // Idempotency: a flaky-network retry carrying the same clientRequestId must not
+  // create a duplicate row — return the original id.
+  if (body.clientRequestId) {
+    var existingReqs = readAll_(SHEET_REQUESTS);
+    for (var di = 0; di < existingReqs.length; di++) {
+      if (existingReqs[di].meta && existingReqs[di].meta.clientRequestId === body.clientRequestId) {
+        return { code: 200, obj: { ok: true, id: existingReqs[di].id, deduped: true } };
+      }
+    }
+  }
   var v = validateRequestInput_(input);
   if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
   var id = genId_("req");
@@ -578,7 +588,7 @@ function handleSubmitRequest_(body, client) {
     changeNote: "",
     createdAt: now_(),
     updatedAt: now_(),
-    meta: { activity: [{ at: now_(), kind: "created", text: "submitted via portal" }] }
+    meta: { clientRequestId: body.clientRequestId || "", activity: [{ at: now_(), kind: "created", text: "submitted via portal" }] }
   };
   appendRow_(SHEET_REQUESTS, rec);
   return { code: 200, obj: { ok: true, id: id } };

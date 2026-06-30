@@ -104,6 +104,12 @@ export function createApp({ storePath, uploadsDir }) {
               // honored only for admin. Stops a client with one token from planting a
               // request into another client's tenant (cross-tenant write spoof).
               const forcedClientId = adminOk ? (body.request?.clientId || client?.clientId) : client?.clientId;
+              // Idempotency: a flaky-network retry carrying the same clientRequestId must
+              // not create a duplicate row — return the original.
+              if (body.clientRequestId) {
+                const dup = data.requests.find((r) => r.meta && r.meta.clientRequestId === body.clientRequestId);
+                if (dup) return { code: 200, obj: { ok: true, id: dup.id, deduped: true } };
+              }
               const v = validateRequestInput({ ...body.request, clientId: forcedClientId });
               if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
               const id = genId("req");
@@ -117,7 +123,7 @@ export function createApp({ storePath, uploadsDir }) {
                 changeNote: "",
                 createdAt: now(),
                 updatedAt: now(),
-                meta: { activity: [{ at: now(), kind: "created", text: "submitted via portal" }] },
+                meta: { clientRequestId: body.clientRequestId || "", activity: [{ at: now(), kind: "created", text: "submitted via portal" }] },
               });
               return { code: 200, obj: { ok: true, id } };
             }

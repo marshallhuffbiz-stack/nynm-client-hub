@@ -546,6 +546,10 @@ function updateUploadStatus() {
 
 /* ---------- submit request ---------- */
 
+// Stable id for one logical submission; reused across flaky-network retries so the
+// backend dedupes, cleared on success. Prevents duplicate requests on mobile.
+let pendingSubmitId = null;
+
 async function submitRequest(event) {
   event.preventDefault();
   if (busy) return;
@@ -569,13 +573,15 @@ async function submitRequest(event) {
 
   setBusy(true, reqSubmit, "Sending…");
   try {
+    if (!pendingSubmitId) pendingSubmitId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `c_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const res = await api.submit({
       type: selectedType,
       title: reqTitle.value.trim(),
       description,
       attachments: pendingAttachments.slice(),
-    });
+    }, pendingSubmitId);
     if (res && res.ok) {
+      pendingSubmitId = null;
       resetRequestForm();
       toast("Request sent. We'll take it from here.");
       await refresh();

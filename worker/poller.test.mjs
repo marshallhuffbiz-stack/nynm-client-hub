@@ -226,3 +226,15 @@ test("uploadAttachment rejects an oversized file (413)", async () => {
   const body = await r.json();
   assert.equal(body.ok, false);
 });
+
+test("submitRequest is idempotent on clientRequestId (no duplicate on a retry)", async () => {
+  const reqId = "fixed-client-req-id-123";
+  const body = { c: "t", action: "submitRequest", clientRequestId: reqId, request: { type: "post", description: "idempotency test" } };
+  const post = () => fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).then((r) => r.json());
+  const r1 = await post();
+  const r2 = await post(); // simulates the flaky-network re-tap
+  assert.ok(r1.ok && r2.ok);
+  assert.equal(r1.id, r2.id); // same row, not a new one
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(all.requests.filter((x) => x.meta && x.meta.clientRequestId === reqId).length, 1);
+});

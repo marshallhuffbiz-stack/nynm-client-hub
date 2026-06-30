@@ -27,7 +27,7 @@ async function http(method, query, body) {
 export const portalApi = (clientToken, pin = "") => ({
   load: () =>
     http("GET", `?client=${encodeURIComponent(clientToken)}${pin ? `&pin=${encodeURIComponent(pin)}` : ""}`),
-  submit: (request) => http("POST", "", { c: clientToken, action: "submitRequest", request }),
+  submit: (request, clientRequestId) => http("POST", "", { c: clientToken, action: "submitRequest", request, clientRequestId }),
   addEvent: (event) => http("POST", "", { c: clientToken, action: "addEvent", event }),
   upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }),
   message: (id, text) => http("POST", "", { c: clientToken, action: "postMessage", id, text }),
