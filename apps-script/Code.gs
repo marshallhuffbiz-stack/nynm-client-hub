@@ -351,6 +351,17 @@ function getAdminToken_() {
   return PropertiesService.getScriptProperties().getProperty(PROP_ADMIN_TOKEN);
 }
 
+// Constant-time string compare for the admin token (the master key). Avoids leaking
+// it byte-by-byte via the early-return timing of ===. Length check first is acceptable.
+function safeEquals_(a, b) {
+  a = String(a == null ? "" : a);
+  b = String(b == null ? "" : b);
+  if (a.length !== b.length) return false;
+  var diff = 0;
+  for (var i = 0; i < a.length; i++) diff |= (a.charCodeAt(i) ^ b.charCodeAt(i));
+  return diff === 0;
+}
+
 function getUploadFolder_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(PROP_UPLOAD_FOLDER_ID);
@@ -373,7 +384,7 @@ function doGet(e) {
     var c = p.client != null && p.client !== "" ? p.client : p.c;
 
     if (admin != null && admin !== undefined && admin !== "") {
-      if (admin !== getAdminToken_()) {
+      if (!safeEquals_(admin, getAdminToken_())) {
         return json_(403, { ok: false, error: "bad admin token" });
       }
       return json_(200, {
@@ -434,7 +445,7 @@ function doPost(e) {
 
     // Auth (read tokens up front, same as mock data0 read).
     var adminToken = getAdminToken_();
-    var adminOk = !!(body.admin && body.admin === adminToken);
+    var adminOk = !!(body.admin && safeEquals_(body.admin, adminToken));
 
     // Client lookup mirrors the mock POST path exactly: find by token, NO active
     // filter here (the mock's POST handler does not check active — only GET does).
@@ -520,7 +531,7 @@ function handleDeleteRequest_(body) {
 // Append a message to a request's two-way thread (client <-> team). A client may
 // only post to its own request; admin may post to any. Stored in meta.thread (JSON).
 function handlePostMessage_(body, client) {
-  var adminOk = !!(body.admin && body.admin === getAdminToken_());
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
   var requests = readAll_(SHEET_REQUESTS);
   var rec = null;
   for (var i = 0; i < requests.length; i++) {
@@ -542,10 +553,13 @@ function handlePostMessage_(body, client) {
 }
 
 function handleSubmitRequest_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
   var input = {};
   var k;
   for (k in (body.request || {})) { if (body.request.hasOwnProperty(k)) input[k] = body.request[k]; }
-  input.clientId = (body.request && body.request.clientId) || (client && client.clientId);
+  // Tenant FORCED from the auth'd client token; a body clientId is honored only for
+  // admin. Stops one client's token from planting a request into another tenant.
+  input.clientId = adminOk ? ((body.request && body.request.clientId) || (client && client.clientId)) : (client && client.clientId);
   var v = validateRequestInput_(input);
   if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
   var id = genId_("req");
@@ -571,10 +585,11 @@ function handleSubmitRequest_(body, client) {
 }
 
 function handleAddEvent_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
   var input = {};
   var k;
   for (k in (body.event || {})) { if (body.event.hasOwnProperty(k)) input[k] = body.event[k]; }
-  input.clientId = (body.event && body.event.clientId) || (client && client.clientId);
+  input.clientId = adminOk ? ((body.event && body.event.clientId) || (client && client.clientId)) : (client && client.clientId);
   var v = validateEventInput_(input);
   if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
   var eventId = genId_("evt");
@@ -596,6 +611,12 @@ function handleAddEvent_(body, client) {
 
 function handleUploadAttachment_(body) {
   var file = body.file || {};
+  // Reject oversized uploads up front (base64 length ~10M chars ≈ 7MB binary) so a big
+  // photo can't blow the payload ceiling or hold the write lock; the portal also
+  // compresses before upload.
+  if (String(file.dataBase64 || "").length > 10000000) {
+    return { code: 413, obj: { ok: false, error: "file too large (max ~7MB) — try a smaller photo" } };
+  }
   var safe = String(file.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
   var fname = genId_("att") + "-" + safe;
   var mime = file.mime || "";
@@ -643,6 +664,14 @@ function handleUpdateRequest_(body) {
     var activity = (cur.meta.activity || []).slice();
     activity.push({ at: now_(), kind: act, text: (patch._note != null ? patch._note : act) });
     cur.meta.activity = activity;
+    // A successful draft clears the orphan-recovery retry counter (mirrors worker/jobs.mjs)
+    // so a long-lived request that re-drafts later isn't pre-charged toward the cap.
+    if (act === "ready") {
+      var run = cur.meta.run || {};
+      run.requeues = 0;
+      run.error = "";
+      cur.meta.run = run;
+    }
   }
   delete patch._note;
 

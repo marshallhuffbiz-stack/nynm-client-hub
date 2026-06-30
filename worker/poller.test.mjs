@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
-import { runOnce, preflightDisk, isLiveProcess, drainArgs } from "./poller.mjs";
+import { runOnce, preflightDisk, isLiveProcess, drainArgs, spawnClaudeDrain } from "./poller.mjs";
 import { apiUpdate } from "./writeback.mjs";
 
 let srv, base, dir;
@@ -172,4 +172,57 @@ test("runOnce auto-recovers an orphaned 'drafting' row by re-queueing it", async
   assert.ok(res.recovered >= 1);
   const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
   assert.equal(all.requests.find((r) => r.id === id).stage, "queued"); // re-queued, no longer stranded
+});
+
+test("spawnClaudeDrain hard-kills a wedged drain so it never holds the lock forever", async () => {
+  const killed = [];
+  const fakeChild = { on() {}, kill(sig) { killed.push(sig); } }; // never emits close -> simulates a hang
+  await writeFile(join(dir, "prompt.md"), "drain prompt");
+  const drainer = spawnClaudeDrain({
+    claudeBin: "x", cwd: dir, timeoutMs: 40, killGraceMs: 20,
+    spawnFn: () => fakeChild,
+    briefPath: join(dir, "brief.json"),
+    promptPath: join(dir, "prompt.md"),
+  });
+  const t0 = Date.now();
+  await drainer({ drafts: [{ id: "q1" }], ships: [] });
+  assert.ok(Date.now() - t0 >= 40, "waited for the timeout before giving up");
+  assert.ok(killed.includes("SIGTERM"), "sent SIGTERM to the wedged child");
+  assert.ok(killed.includes("SIGKILL"), "escalated to SIGKILL");
+});
+
+test("submitRequest forces the tenant from the token (no cross-tenant write spoof)", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ c: "t", action: "submitRequest", request: { clientId: "victim-co", type: "post", description: "spoof attempt" } }),
+  }).then((r) => r.json());
+  assert.ok(created.ok);
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const row = all.requests.find((r) => r.id === created.id);
+  assert.equal(row.clientId, "the-o"); // forced to the token's client, NOT the body's "victim-co"
+});
+
+test("a successful draft (ready) resets the orphan-recovery requeues counter", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ c: "t", action: "submitRequest", request: { type: "post", description: "requeues reset" } }),
+  }).then((r) => r.json());
+  const id = created.id;
+  await apiUpdate(base, "A", id, { action: "send" });  // -> queued
+  await apiUpdate(base, "A", id, { action: "start" }); // -> drafting
+  await apiUpdate(base, "A", id, { meta: { run: { requeues: 2 } } }); // simulate prior orphan recoveries
+  await apiUpdate(base, "A", id, { action: "ready", draft: { caption: "x" } }); // a real drain succeeds
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(all.requests.find((r) => r.id === id).meta.run.requeues, 0);
+});
+
+test("uploadAttachment rejects an oversized file (413)", async () => {
+  const big = "A".repeat(10_000_001); // > the 10M-char base64 cap
+  const r = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ c: "t", action: "uploadAttachment", file: { name: "big.jpg", mime: "image/jpeg", dataBase64: big } }),
+  });
+  assert.equal(r.status, 413);
+  const body = await r.json();
+  assert.equal(body.ok, false);
 });

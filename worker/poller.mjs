@@ -126,18 +126,46 @@ export function drainArgs({ drainPrompt, settingsPath, model }) {
   return args;
 }
 
-export function spawnClaudeDrain({ claudeBin = "claude", cwd = join(HERE, ".."), model }) {
+export function spawnClaudeDrain({
+  claudeBin = "claude",
+  cwd = join(HERE, ".."),
+  model,
+  timeoutMs = 10 * 60 * 1000,
+  killGraceMs = 5000,
+  spawnFn = spawn,
+  briefPath = join(HERE, "drain-jobs.json"),
+  promptPath = join(HERE, "drain.md"),
+}) {
   return async ({ drafts, ships }) => {
-    const briefPath = join(HERE, "drain-jobs.json");
     await writeFile(briefPath, JSON.stringify({ drafts, ships, at: new Date().toISOString() }, null, 2));
-    const drainPrompt = await readFile(join(HERE, "drain.md"), "utf8");
+    const drainPrompt = await readFile(promptPath, "utf8");
     await new Promise((resolve) => {
-      const child = spawn(claudeBin, drainArgs({ drainPrompt, settingsPath: join(HERE, "claude-settings.json"), model }), {
+      const child = spawnFn(claudeBin, drainArgs({ drainPrompt, settingsPath: join(HERE, "claude-settings.json"), model }), {
         cwd,
         stdio: ["ignore", "inherit", "inherit"],
       });
-      child.on("close", () => resolve());
-      child.on("error", () => resolve());
+      let settled = false;
+      let timer = null;
+      let killTimer = null;
+      const settle = () => {
+        if (settled) return;
+        settled = true;
+        if (timer) clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+        resolve();
+      };
+      // Hard wall-clock cap. A wedged drain (hung network / tool loop / MCP hang) must
+      // NEVER hold the worker .lock forever — that would freeze EVERY client's pipeline
+      // (drafts, auto-publish, notifications, digest) until a manual kill. SIGTERM, then
+      // escalate to SIGKILL, then move on; the half-finished rows self-heal via the
+      // drafting orphan-recovery on the next tick.
+      timer = setTimeout(() => {
+        console.error(new Date().toISOString(), `drain exceeded ${Math.round(timeoutMs / 1000)}s — terminating; affected rows re-queue via orphan recovery`);
+        try { child.kill("SIGTERM"); } catch {}
+        killTimer = setTimeout(() => { try { child.kill("SIGKILL"); } catch {} settle(); }, killGraceMs);
+      }, timeoutMs);
+      child.on("close", settle);
+      child.on("error", settle);
     });
     // The drain itself moves rows to ready/done; we report what we handed off.
     return { drafted: drafts.length, shipped: ships.length };
@@ -255,7 +283,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
-      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model }),
+      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model, timeoutMs: cfg.drainTimeoutMs ?? 10 * 60 * 1000 }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
       autoEvents,
       notifier,

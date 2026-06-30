@@ -100,7 +100,11 @@ export function createApp({ storePath, uploadsDir }) {
         const result = await store.tx(async (data) => {
           switch (action) {
             case "submitRequest": {
-              const v = validateRequestInput({ ...body.request, clientId: body.request?.clientId || client?.clientId });
+              // Tenant is FORCED from the authenticated client token; a body clientId is
+              // honored only for admin. Stops a client with one token from planting a
+              // request into another client's tenant (cross-tenant write spoof).
+              const forcedClientId = adminOk ? (body.request?.clientId || client?.clientId) : client?.clientId;
+              const v = validateRequestInput({ ...body.request, clientId: forcedClientId });
               if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
               const id = genId("req");
               data.requests.push({
@@ -118,7 +122,8 @@ export function createApp({ storePath, uploadsDir }) {
               return { code: 200, obj: { ok: true, id } };
             }
             case "addEvent": {
-              const v = validateEventInput({ ...body.event, clientId: body.event?.clientId || client?.clientId });
+              const forcedEventClientId = adminOk ? (body.event?.clientId || client?.clientId) : client?.clientId;
+              const v = validateEventInput({ ...body.event, clientId: forcedEventClientId });
               if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
               const eventId = genId("evt");
               data.events.push({ eventId, ...v.value, promoted: false, requestId: "", createdAt: now(), updatedAt: now() });
@@ -126,6 +131,11 @@ export function createApp({ storePath, uploadsDir }) {
             }
             case "uploadAttachment": {
               const file = body.file || {};
+              // Reject oversized uploads up front (base64 length ~10M chars ≈ 7MB binary).
+              // Big phone photos otherwise inflate ~33% and can blow the backend payload
+              // ceiling / hold the write lock; the portal compresses before upload too.
+              if (String(file.dataBase64 || "").length > 10_000_000)
+                return { code: 413, obj: { ok: false, error: "file too large (max ~7MB) — try a smaller photo" } };
               const safe = String(file.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
               const fname = `${genId("att")}-${safe}`;
               await mkdir(uploadsDir, { recursive: true });
@@ -147,6 +157,10 @@ export function createApp({ storePath, uploadsDir }) {
                 delete patch.action;
                 cur.meta = cur.meta || { activity: [] };
                 cur.meta.activity = (cur.meta.activity || []).concat([{ at: now(), kind: act, text: patch._note || act }]);
+                // A successful draft clears the orphan-recovery retry counter, so a
+                // long-lived request that re-drafts later starts fresh instead of being
+                // pre-charged toward the give-up cap.
+                if (act === "ready") cur.meta.run = { ...(cur.meta.run || {}), requeues: 0, error: "" };
               }
               delete patch._note;
               data.requests[idx] = mergePatch(cur, patch, now());
