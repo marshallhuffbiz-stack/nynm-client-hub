@@ -130,6 +130,7 @@ export function spawnClaudeDrain({
   claudeBin = "claude",
   cwd = join(HERE, ".."),
   model,
+  oauthToken,
   timeoutMs = 10 * 60 * 1000,
   killGraceMs = 5000,
   spawnFn = spawn,
@@ -139,9 +140,20 @@ export function spawnClaudeDrain({
   return async ({ drafts, ships }) => {
     await writeFile(briefPath, JSON.stringify({ drafts, ships, at: new Date().toISOString() }, null, 2));
     const drainPrompt = await readFile(promptPath, "utf8");
+    // Auth the headless drain with the Max-SUBSCRIPTION OAuth token (from
+    // `claude setup-token`), NOT an API key — the macOS keychain that interactive
+    // Claude Code uses isn't readable under launchd. Strip ANTHROPIC_API_KEY so the
+    // subscription token always wins (an API key would take precedence and bill
+    // per-token, which we explicitly do not want).
+    const childEnv = { ...process.env };
+    if (oauthToken) {
+      childEnv.CLAUDE_CODE_OAUTH_TOKEN = oauthToken;
+      delete childEnv.ANTHROPIC_API_KEY;
+    }
     await new Promise((resolve) => {
       const child = spawnFn(claudeBin, drainArgs({ drainPrompt, settingsPath: join(HERE, "claude-settings.json"), model }), {
         cwd,
+        env: childEnv,
         stdio: ["ignore", "inherit", "inherit"],
       });
       let settled = false;
@@ -283,7 +295,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
-      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model, timeoutMs: cfg.drainTimeoutMs ?? 10 * 60 * 1000 }),
+      drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model, oauthToken: cfg.claudeOauthToken, timeoutMs: cfg.drainTimeoutMs ?? 10 * 60 * 1000 }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
       autoEvents,
       notifier,

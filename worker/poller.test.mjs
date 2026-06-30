@@ -191,6 +191,20 @@ test("spawnClaudeDrain hard-kills a wedged drain so it never holds the lock fore
   assert.ok(killed.includes("SIGKILL"), "escalated to SIGKILL");
 });
 
+test("spawnClaudeDrain runs the drain on the Max-subscription OAuth token, never an API key", async () => {
+  let seenEnv = null;
+  const fakeChild = { on(ev, cb) { if (ev === "close") setTimeout(cb, 0); }, kill() {} };
+  await writeFile(join(dir, "prompt2.md"), "p");
+  const drainer = spawnClaudeDrain({
+    claudeBin: "x", cwd: dir, oauthToken: "oauth-test-123",
+    spawnFn: (_bin, _args, opts) => { seenEnv = opts.env; return fakeChild; },
+    briefPath: join(dir, "brief2.json"), promptPath: join(dir, "prompt2.md"),
+  });
+  await drainer({ drafts: [{ id: "q1" }], ships: [] });
+  assert.equal(seenEnv.CLAUDE_CODE_OAUTH_TOKEN, "oauth-test-123");
+  assert.equal(seenEnv.ANTHROPIC_API_KEY, undefined); // API key stripped so the subscription token wins
+});
+
 test("submitRequest forces the tenant from the token (no cross-tenant write spoof)", async () => {
   const created = await fetch(base, {
     method: "POST", headers: { "content-type": "application/json" },
