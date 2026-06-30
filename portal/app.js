@@ -441,15 +441,21 @@ async function uploadOne(file) {
   updateUploadStatus();
   try {
     const payload = await fileToPayload(file);
+    // Defense-in-depth: even after compression, refuse a file the backend would reject
+    // (matches the ~7MB server cap) so the person gets a clear message, not a silent fail.
+    if ((payload.dataBase64 || "").length > 10000000) {
+      toast(`"${file.name || "That photo"}" is too large to upload — try a smaller one.`);
+      return;
+    }
     const res = await api.upload(payload);
     if (res && res.ok && res.url) {
       pendingAttachments.push({ name: res.name || file.name, url: res.url, mime: res.mime || file.type || "" });
       renderThumbs();
     } else {
-      toast("That didn't upload. Try again.");
+      toast(`Couldn't upload "${file.name || "that photo"}" — try again.`);
     }
   } catch (err) {
-    toast("That didn't upload. Try again.");
+    toast(`Couldn't upload "${file.name || "that photo"}" — try again.`);
   } finally {
     uploadingCount = Math.max(0, uploadingCount - 1);
     updateUploadStatus();

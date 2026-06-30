@@ -43,15 +43,44 @@ export const deskApi = (adminToken) => ({
   message: (id, text) => http("POST", "", { admin: adminToken, action: "postMessage", id, text }),
 });
 
-// Turn a File object into the {name,mime,dataBase64} the upload action expects.
-export function fileToPayload(file) {
-  return new Promise((resolve, reject) => {
+// Downscale + re-encode large images IN THE BROWSER before upload. Phone photos run
+// 3–12MB; sent raw as base64 (+33%) they're slow on mobile data and can blow the
+// backend payload ceiling. Cap the longest edge and re-encode JPEG. Non-images,
+// GIFs, and already-small images pass through untouched. Best-effort: ANY failure
+// (or no size win) falls back to the original file, so this can never make an upload
+// worse — at worst it's a no-op.
+export async function compressImage(file, { maxEdge = 2000, quality = 0.82, skipUnder = 600 * 1024 } = {}) {
+  try {
+    if (!file || !/^image\//.test(file.type) || file.type === "image/gif") return file;
+    if (file.size <= skipUnder) return file;
+    if (typeof createImageBitmap !== "function" || typeof document === "undefined") return file;
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+    if (bitmap.close) bitmap.close();
+    const blob = await new Promise((res) => canvas.toBlob(res, "image/jpeg", quality));
+    if (!blob || blob.size >= file.size) return file; // no win -> keep the original
+    const name = String(file.name || "photo").replace(/\.(heic|heif|png|webp|jpe?g)$/i, "") + ".jpg";
+    return new File([blob], name, { type: "image/jpeg" });
+  } catch {
+    return file;
+  }
+}
+
+// Turn a File object into the {name,mime,dataBase64} the upload action expects,
+// compressing large images first.
+export async function fileToPayload(file) {
+  const f = await compressImage(file);
+  const b64 = await new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = () => {
-      const b64 = String(reader.result).split(",")[1] || "";
-      resolve({ name: file.name, mime: file.type || "application/octet-stream", dataBase64: b64 });
-    };
+    reader.onload = () => resolve(String(reader.result).split(",")[1] || "");
     reader.onerror = reject;
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(f);
   });
+  return { name: f.name, mime: f.type || "application/octet-stream", dataBase64: b64 };
 }
