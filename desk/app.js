@@ -670,8 +670,12 @@ function errorActions(r) {
   wrap.append(el("div", { class: "notebox" }, el("strong", {}, "Error: "), document.createTextNode(msg)));
   const retry = el("button", { type: "button", class: "btn ghost sm" }, "Retry");
   retry.addEventListener("click", async () => {
-    const res = await call(() => api.update(r.id, { action: "start" }));
-    if (res) { applyRequest(res.request); toast("Retrying."); render(); }
+    // Re-queue — NOT action:"start", which maps error->drafting, a stage the worker
+    // ignores (it only picks up "queued"), so the request would strand. Clearing
+    // run.error stops the Desk showing the stale failure once it's back in the queue.
+    const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: "" } };
+    const res = await call(() => api.update(r.id, { stage: "queued", draft: null, meta }));
+    if (res) { applyRequest(res.request); toast("Back in the queue."); render(); }
   });
   wrap.append(el("div", { class: "btn-row" }, retry));
   return wrap;

@@ -25,3 +25,41 @@ export function shouldRunDigest(lastRunIso, now, hour) {
   if (!lastRunIso) return true;
   return new Date(lastRunIso) < target;
 }
+
+// A 'drafting' row is assumed to be owned by a live Claude drain. Worker ticks are
+// serialized by worker/.lock, so any 'drafting' row still present at fetch time is
+// from a PRIOR tick whose drain already exited (crashed, was killed, ran out of space
+// mid-render, or — before the Retry fix — was pushed here by a manual Retry). Nothing
+// else re-queues it, so without this it is stranded forever. The age threshold is a
+// safety margin so a legitimately long-running drain is never mistaken for an orphan.
+export function detectOrphans(requests = [], now = new Date(), maxAgeMs = 15 * 60 * 1000) {
+  const t = now instanceof Date ? now.getTime() : new Date(now).getTime();
+  const orphans = [];
+  for (const r of requests) {
+    if (r.stage !== "drafting") continue;
+    const updated = r.updatedAt ? Date.parse(r.updatedAt) : NaN;
+    if (Number.isNaN(updated) || t - updated >= maxAgeMs) orphans.push(r);
+  }
+  return orphans;
+}
+
+// Decide what to do with each orphaned 'drafting' row: re-queue it (clearing any stale
+// error so the Desk stops showing it), or — once it has been auto-recovered maxRequeues
+// times — give up and surface a real error instead of re-spawning a drain every tick
+// forever. Returns [{ id, patch }] for the caller to apply via apiUpdate.
+export function planOrphanRecovery(orphans = [], maxRequeues = 3) {
+  return orphans.map((r) => {
+    const run = (r.meta && r.meta.run) || {};
+    const tries = Number(run.requeues || 0);
+    if (tries >= maxRequeues) {
+      return {
+        id: r.id,
+        patch: { stage: "error", meta: { ...(r.meta || {}), run: { ...run, error: `Auto-recovery gave up after ${tries} attempts — please resend this request.` } } },
+      };
+    }
+    return {
+      id: r.id,
+      patch: { stage: "queued", draft: null, meta: { ...(r.meta || {}), run: { ...run, requeues: tries + 1, error: "" } } },
+    };
+  });
+}

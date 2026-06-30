@@ -87,7 +87,7 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
   assert.equal(byId.a1.stage, "done");
 });
 
-test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + notifies", async () => {
+test("preflightDisk: ample disk is ok; low disk skips WITHOUT touching the queue", async () => {
   const created = await fetch(base, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "disk guard test" } }),
@@ -95,7 +95,7 @@ test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + no
   const id = created.id;
   await apiUpdate(base, "A", id, { action: "send" }); // submitted -> queued
 
-  // Ample free space -> no-op, request stays queued.
+  // Ample free space -> ok, request stays queued.
   const ample = await preflightDisk({
     apiBase: base, adminToken: "A", minFreeBytes: 1024, dir: ".",
     statfsFn: async () => ({ bavail: 1_000_000, bsize: 4096 }), notifier: {},
@@ -104,23 +104,20 @@ test("preflightDisk: ample disk is a no-op; low disk flags blocked requests + no
   let all = await fetch(`${base}/?admin=A`).then((r) => r.json());
   assert.equal(all.requests.find((r) => r.id === id).stage, "queued");
 
-  // Low free space -> flag the request as an out-of-space error + notify, skip drain.
-  let blocked = null;
-  const notifier = { async notifyBlocked(info) { blocked = info; } };
+  // Low free space -> SKIP the tick, but NEVER flip the row to error. Leaving it
+  // queued means the worker auto-resumes once disk frees — this is the fix for the
+  // queued->error->Retry->drafting trap that stranded requests.
   const low = await preflightDisk({
     apiBase: base, adminToken: "A", minFreeBytes: 2 * 1024 ** 3, dir: ".",
-    statfsFn: async () => ({ bavail: 25_600, bsize: 4096 }), notifier, // ~100 MB free
+    statfsFn: async () => ({ bavail: 25_600, bsize: 4096 }), notifier: {}, // ~100 MB free
   });
   assert.equal(low.ok, false);
-  assert.ok(low.marked >= 1);
-  assert.ok(blocked && blocked.count >= 1);
+  assert.equal(low.skipped, true);
   all = await fetch(`${base}/?admin=A`).then((r) => r.json());
-  const row = all.requests.find((r) => r.id === id);
-  assert.equal(row.stage, "error");
-  assert.match(row.meta.run.error, /Out of space/);
+  assert.equal(all.requests.find((r) => r.id === id).stage, "queued"); // untouched, NOT error
 });
 
-test("preflightDisk leaves an in-flight 'drafting' row alone (only flags 'queued')", async () => {
+test("preflightDisk leaves ALL rows untouched on low disk (incl. a drafting row)", async () => {
   const created = await fetch(base, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "drafting guard test" } }),
@@ -152,4 +149,27 @@ test("isLiveProcess tells a live pid from a stale/empty lock", () => {
   assert.equal(isLiveProcess(2147483646), false); // a pid that is not running
   assert.equal(isLiveProcess(""), false);
   assert.equal(isLiveProcess("nope"), false);
+});
+
+test("runOnce auto-recovers an orphaned 'drafting' row by re-queueing it", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "orphan recovery test" } }),
+  }).then((r) => r.json());
+  const id = created.id;
+  await apiUpdate(base, "A", id, { action: "send" });  // submitted -> queued
+  await apiUpdate(base, "A", id, { action: "start" }); // queued -> drafting, but no live drain will finish it
+
+  // drainer stub does nothing (no live drain) — the row would be stranded forever
+  // without orphan recovery.
+  const drainer = async () => ({ drafted: 0 });
+  const res = await runOnce({
+    apiBase: base, adminToken: "A", caps: { draft: 5, ship: 5 },
+    drainer, notifier: { async notifyNew() {}, async notifyDigest() {} },
+    orphanMaxAgeMs: 0, maxRequeues: 3,
+    now: new Date(Date.now() + 60_000), // a minute later, so the just-set drafting row is past the (0ms) threshold
+  });
+  assert.ok(res.recovered >= 1);
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(all.requests.find((r) => r.id === id).stage, "queued"); // re-queued, no longer stranded
 });

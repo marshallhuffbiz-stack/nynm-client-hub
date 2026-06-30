@@ -9,7 +9,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
-import { detectJobs, shouldRunDigest } from "./jobs.mjs";
+import { detectJobs, shouldRunDigest, detectOrphans, planOrphanRecovery } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
 import { apiFetchAll, apiUpdate } from "./writeback.mjs";
 import { makeNotifier } from "./notify.mjs";
@@ -35,11 +35,24 @@ export async function runOnce({
   digestHour = 8,
   getLastDigest,
   setLastDigest,
+  orphanMaxAgeMs = 15 * 60 * 1000,
+  maxRequeues = 3,
   now = new Date(),
 }) {
   const all = await apiFetchAll(apiBase, adminToken);
   if (!all.ok) throw new Error("fetch all failed: " + (all.error || all.status));
   const reqs = all.requests || [];
+
+  // Recover orphaned 'drafting' rows (a drain that died / ran out of space mid-render,
+  // or a manual Retry that landed in 'drafting') by re-queueing them so they aren't
+  // stranded with no live drain to finish them. Capped per-row (planOrphanRecovery) so
+  // a permanently-failing request surfaces a real error instead of looping forever.
+  let recovered = 0;
+  for (const a of planOrphanRecovery(detectOrphans(reqs, now, orphanMaxAgeMs), maxRequeues)) {
+    const res = await apiUpdate(apiBase, adminToken, a.id, a.patch);
+    if (res && res.ok !== false && a.patch.stage === "queued") recovered += 1;
+  }
+
   const jobs = detectJobs(reqs, caps);
 
   // Eats on 601 date automation: dated requests -> website entry + a fully-auto day-of
@@ -97,6 +110,7 @@ export async function runOnce({
     shipFailed: shipResult.failed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
+    recovered,
   };
 }
 
@@ -130,23 +144,16 @@ export function spawnClaudeDrain({ claudeBin = "claude", cwd = join(HERE, ".."),
   };
 }
 
-// Pre-flight disk guard. Rendering a post needs room; if the machine is low on
-// disk the render fails and silently strands a request in "drafting" (and the
-// worker can't even write its .lock). So BEFORE drafting we check free space: if
-// it's below the floor, surface every blocked request as a clear "out of space"
-// error (the Desk shows it with a Retry), notify Marshall, and tell the caller to
-// skip this tick. All writebacks are network calls, so they work with a full disk.
-// statfsFn/fetchAll/update/notifier are injected so this is unit-testable.
-export async function preflightDisk({
-  apiBase,
-  adminToken,
-  minFreeBytes,
-  dir,
-  statfsFn = statfs,
-  fetchAll = apiFetchAll,
-  update = apiUpdate,
-  notifier,
-}) {
+// Pre-flight disk guard. A render needs some scratch space; if the machine is truly
+// out of space the render can fail and strand a request mid-draft. So BEFORE drafting
+// we check free space against a SMALL floor (a few hundred MB — enough for one render
+// plus the .lock write, NOT a conservative multi-GB cushion). If we're under it we
+// DON'T touch the queue: rows stay exactly as they are and the worker auto-resumes once
+// space frees. (The old guard flipped 'queued' -> 'error' at a 2 GB floor, which — with
+// the Desk's Retry pushing 'error' -> 'drafting' — stranded requests in 'drafting' with
+// no live drain. Non-destructive skip removes that whole trap.) statfsFn is injected so
+// this is unit-testable.
+export async function preflightDisk({ minFreeBytes, dir, statfsFn = statfs }) {
   let free;
   try {
     const st = await statfsFn(dir);
@@ -155,26 +162,8 @@ export async function preflightDisk({
     return { ok: true, free: null }; // can't measure -> don't block
   }
   if (free >= minFreeBytes) return { ok: true, free };
-
-  const freeMB = Math.round(free / 1048576);
-  let marked = 0;
-  try {
-    const all = await fetchAll(apiBase, adminToken);
-    // Only flag "queued" rows — never "drafting". A drafting row is being actively
-    // rendered by a live drain from a prior tick; flagging it as error would make
-    // that drain's later "ready" writeback an illegal transition and lose the draft.
-    const blocked = ((all && all.requests) || []).filter((r) => r.stage === "queued");
-    const msg = `Out of space on the worker machine (${freeMB} MB free). Free disk space, then tap Retry.`;
-    for (const r of blocked) {
-      const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: msg } };
-      const res = await update(apiBase, adminToken, r.id, { stage: "error", meta });
-      if (res && res.ok !== false) marked += 1;
-    }
-    if (notifier && notifier.notifyBlocked) await notifier.notifyBlocked({ freeMB, count: blocked.length });
-  } catch {
-    /* surfacing is best-effort; the important part is NOT attempting the render */
-  }
-  return { ok: false, free, marked };
+  // Under the floor: skip this tick, leave every row untouched (non-destructive).
+  return { ok: false, free, skipped: true };
 }
 
 // True if `pid` is a currently-running process — used to tell a live drain's lock
@@ -211,16 +200,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   let weWroteLock = false;
   try {
     const cfg = await loadConfig();
-    // Pre-flight: if the disk is too low to render, surface it + skip (don't strand a request mid-render).
+    // Pre-flight: only skip if disk is GENUINELY out of space (a few hundred MB). The
+    // skip is non-destructive — rows stay queued and resume automatically once space
+    // frees, so a near-full-but-fine machine (Marshall routinely runs at ~5 GB free)
+    // keeps working normally.
     const guard = await preflightDisk({
-      apiBase: cfg.execUrl,
-      adminToken: cfg.adminToken,
-      minFreeBytes: cfg.minFreeBytes ?? 2 * 1024 ** 3,
+      minFreeBytes: cfg.minFreeBytes ?? 500 * 1024 ** 2, // ~500 MB render headroom, not a multi-GB cushion
       dir: HERE,
-      notifier: makeNotifier(cfg),
     });
     if (!guard.ok) {
-      console.error(new Date().toISOString(), `worker paused: low disk (${Math.round((guard.free || 0) / 1048576)} MB free); flagged ${guard.marked} request(s) for retry`);
+      console.error(new Date().toISOString(), `worker idle: very low disk (${Math.round((guard.free || 0) / 1048576)} MB free); queue left untouched, resumes automatically once space frees`);
       process.exit(0);
     }
     if (existsSync(lock)) {
@@ -273,6 +262,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       digestHour: cfg.digestHour ?? 8,
       getLastDigest,
       setLastDigest,
+      orphanMaxAgeMs: (cfg.orphanMaxAgeMinutes ?? 15) * 60 * 1000,
+      maxRequeues: cfg.maxRequeues ?? 3,
     });
     console.log(new Date().toISOString(), "drain:", JSON.stringify(res));
   } catch (e) {
