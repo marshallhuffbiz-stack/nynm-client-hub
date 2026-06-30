@@ -873,7 +873,10 @@ function clientCard(c) {
     c.brandSlug ? `Brand: ${c.brandSlug}` : "No brand set"));
 
   // portal link + copy
-  const portalLink = `${location.origin}/portal/?c=${encodeURIComponent(c.token || "")}`;
+  // Resolve the portal link relative to the Desk's own URL (sibling dir), so it keeps
+  // the GitHub Pages project base path (/nynm-client-hub/). location.origin alone drops
+  // it -> a 404 link. Works in both prod and the local mock.
+  const portalLink = new URL(`../portal/?c=${encodeURIComponent(c.token || "")}`, location.href).href;
   const linkInput = el("input", { type: "text", readonly: "readonly", value: portalLink, "aria-label": "Portal link" });
   linkInput.addEventListener("focus", () => linkInput.select());
 
