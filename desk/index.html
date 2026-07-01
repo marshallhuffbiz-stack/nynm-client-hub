@@ -11,6 +11,8 @@
   <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 
+  <!-- Manifest omits "start_url"/"scope" on purpose so the install URL defaults to
+       the current document URL (carrying ?k=<token>). Do NOT add start_url back. -->
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="../shared/relay-mark.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="../shared/relay-icon-180.png" />

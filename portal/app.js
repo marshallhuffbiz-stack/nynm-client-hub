@@ -5,6 +5,7 @@ import { openLightbox } from "../shared/lightbox.js";
 import { computeIdeas, buildCampaign } from "../shared/ideas.js";
 import { resolveAccess, persistAccess, PORTAL_TOKEN_KEY, PORTAL_PIN_KEY } from "../shared/token.js";
 import { installLaunchManifest } from "../shared/pwa.js";
+import { dataCacheKey, readDataCache, writeDataCache } from "../shared/datacache.js";
 
 /* ---------- token + api ---------- */
 
@@ -28,6 +29,9 @@ const access = resolveAccess({
 const token = access.token;
 let pin = access.pin || "";
 let api = portalApi(token, pin);
+
+// Key for this client's on-device payload cache (stale-while-revalidate).
+const DATA_CACHE_KEY = dataCacheKey("relay.portal.data", token);
 
 // Recovered from storage (no ?c= in the URL) → put it back in the address bar so
 // reloads and the dynamic manifest both see it.
@@ -686,31 +690,45 @@ async function refresh() {
 }
 
 async function start() {
-  showView("loading");
+  // Instant paint: if we've loaded this client before, show their cached data
+  // immediately instead of a multi-second blank while Apps Script cold-starts.
+  const cached = DATA_CACHE_KEY ? readDataCache(safeLocalStorage(), DATA_CACHE_KEY) : null;
+  const painted = !!(cached && cached.ok && cached.client);
+  if (painted) {
+    applyData(cached);
+    showView("app");
+  } else {
+    showView("loading");
+  }
 
+  // Revalidate against the server in the background (and on first-ever open).
   let res;
   try {
     res = await api.load();
   } catch (err) {
-    showView("badlink");
+    // Network blip: keep showing cached data rather than dead-ending.
+    if (!painted) showView("badlink");
     return;
   }
 
-  // Needs a PIN as a second factor.
+  // Needs a PIN as a second factor (authoritative — override any cached view).
   if (res && res.status === 401 && res.needPin) {
     showView("pin");
     setTimeout(() => $("pin-input") && $("pin-input").focus(), 50);
     return;
   }
 
-  // Bad / unknown link.
+  // Bad / unknown link. If we have cached data, this is far more likely a transient
+  // backend hiccup than a revoked token — keep the client on their data instead of
+  // flashing a scary "invalid link" screen.
   if (!res || res.status === 403 || !res.ok) {
-    showView("badlink");
+    if (!painted) showView("badlink");
     return;
   }
 
-  // Good.
+  // Good — persist token, cache the fresh payload, and reconcile the view.
   rememberAccess();
+  if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
   applyData(res);
   showView("app");
 }
@@ -746,6 +764,7 @@ async function onPinSubmit(event) {
 
   if (res && res.ok) {
     rememberAccess();
+    if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
     errorEl.classList.add("hidden");
     applyData(res);
     showView("app");

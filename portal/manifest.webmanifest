@@ -2,8 +2,6 @@
   "name": "Relay by Not Your Normal Marketing",
   "short_name": "Relay",
   "description": "The always-on line between your team and ours.",
-  "start_url": "./",
-  "scope": "./",
   "display": "standalone",
   "background_color": "#F2F2F7",
   "theme_color": "#F2F2F7",

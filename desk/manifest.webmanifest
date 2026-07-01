@@ -2,8 +2,6 @@
   "name": "Relay Desk · Not Your Normal Marketing",
   "short_name": "Relay Desk",
   "description": "Internal control panel for every client request.",
-  "start_url": "./",
-  "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
   "background_color": "#F2F2F7",

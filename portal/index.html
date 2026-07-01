@@ -11,6 +11,10 @@
   <meta name="theme-color" content="#F2F2F7" media="(prefers-color-scheme: light)" />
   <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)" />
 
+  <!-- NOTE: the manifest intentionally omits "start_url"/"scope". That makes the
+       install URL default to the CURRENT document URL (which carries ?c=<token>),
+       so "Add to Home Screen" launches into the right client instead of a tokenless
+       "./" dead-end. Do NOT add start_url back. -->
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="icon" href="../shared/relay-mark.svg" type="image/svg+xml" />
   <link rel="apple-touch-icon" href="../shared/relay-icon-180.png" />
