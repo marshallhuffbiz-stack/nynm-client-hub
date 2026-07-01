@@ -53,6 +53,18 @@ test("validateEventInput", () => {
   assert.equal(validateEventInput({ clientId: "the-o", title: "x", date: "nope" }).ok, false);
 });
 
+test("validateEventInput: optional endTime", () => {
+  // valid start + end round-trips both
+  const ok = validateEventInput({ clientId: "the-o", title: "Trivia", date: "2026-07-04", time: "18:00", endTime: "21:00" });
+  assert.equal(ok.ok, true);
+  assert.equal(ok.value.time, "18:00");
+  assert.equal(ok.value.endTime, "21:00");
+  // endTime is optional — absent is fine and normalizes to ""
+  assert.equal(validateEventInput({ clientId: "the-o", title: "x", date: "2026-07-04" }).value.endTime, "");
+  // a malformed endTime is rejected, just like time
+  assert.equal(validateEventInput({ clientId: "the-o", title: "x", date: "2026-07-04", endTime: "9pm" }).ok, false);
+});
+
 test("nextStage legal transitions", () => {
   assert.equal(nextStage("submitted", "send"), "queued");
   assert.equal(nextStage("queued", "start"), "drafting");

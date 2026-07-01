@@ -44,8 +44,8 @@
 .seg-btn {
   position: relative; z-index: 1;
   appearance: none; -webkit-appearance: none; border: none; background: transparent;
-  font-family: var(--font); font-weight: 500; font-size: 14px; letter-spacing: -0.2px;
-  color: var(--label-2); min-height: 40px; padding: 6px 8px; cursor: pointer;
+  font-family: var(--font); font-weight: 500; font-size: 13px; letter-spacing: -0.24px;
+  color: var(--label-2); min-height: 40px; padding: 6px 4px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   white-space: nowrap;
   transition: color var(--dur-fast) var(--ease), transform 120ms var(--ease);
@@ -53,6 +53,15 @@
 }
 .seg-btn[aria-selected="true"] { color: var(--label); font-weight: 600; }
 .seg-btn:active { transform: scale(0.97); }
+
+/* ===================== Input with a leading iOS-style icon (event date/time) ===================== */
+.field-icon { position: relative; }
+.field-icon .field-ico {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 18px; height: 18px; color: var(--label-2);
+  pointer-events: none;   /* taps fall through to the native picker */
+}
+.field-icon input { padding-left: 40px; }
 .seg-btn:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); border-radius: var(--r-seg-thumb); }
 /* thin iOS dividers between unselected segments (hidden next to the thumb) */
 .seg-btn + .seg-btn::before {

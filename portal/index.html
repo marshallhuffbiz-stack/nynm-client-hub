@@ -77,12 +77,6 @@
 
     <!-- Main app -->
     <div id="view-app" class="hidden">
-      <!-- Proactive ideas (timely suggestions + one-tap campaign packs) -->
-      <div id="ideas-section" class="hidden">
-        <div class="section-label">Ideas for you</div>
-        <div id="ideas-list"></div>
-      </div>
-
       <!-- New request -->
       <section class="card">
         <h2>New request</h2>
@@ -92,27 +86,23 @@
         <div class="seg" id="type-chips" role="tablist" aria-label="Request type" style="margin-top:14px">
           <span class="seg-thumb" aria-hidden="true"></span>
           <button type="button" class="seg-btn" data-type="post" role="tab" aria-selected="true">Post</button>
-          <button type="button" class="seg-btn" data-type="website" role="tab" aria-selected="false">Website fix</button>
+          <button type="button" class="seg-btn" data-type="website" role="tab" aria-selected="false">Website</button>
           <button type="button" class="seg-btn" data-type="design" role="tab" aria-selected="false">Design</button>
           <button type="button" class="seg-btn" data-type="event" role="tab" aria-selected="false">Event</button>
+          <button type="button" class="seg-btn" data-type="other" role="tab" aria-selected="false">Other</button>
         </div>
 
-        <!-- Request form (post / website / design) -->
+        <!-- Request form (post / website / design / other) -->
         <form id="request-form" class="stack hidden" style="margin-top:16px" autocomplete="off">
-          <div>
-            <label for="req-title">Title <span class="muted">(optional)</span></label>
-            <input id="req-title" type="text" placeholder="Short summary" />
-          </div>
           <div>
             <label for="req-desc" id="req-desc-label">What do you need?</label>
             <textarea id="req-desc" placeholder=""></textarea>
           </div>
           <div>
-            <label>Photos or a voice note <span class="muted">(optional)</span></label>
+            <label>Photos <span class="muted">(optional)</span></label>
             <div class="row wrap-row">
               <label class="btn sm" for="req-camera" style="margin:0">Take photo</label>
               <label class="btn sm" for="req-files" style="margin:0">Add photos</label>
-              <button type="button" id="req-voice" class="btn sm">Voice note</button>
               <span id="upload-status" class="muted small"></span>
             </div>
             <input id="req-camera" type="file" accept="image/*" capture="environment" class="visually-hidden" />
@@ -128,14 +118,37 @@
             <label for="evt-title">Event name</label>
             <input id="evt-title" type="text" placeholder="e.g. Friday sidewalk sale" />
           </div>
-          <div class="row" style="gap:12px; align-items:flex-start">
-            <div style="flex:1; min-width:0">
-              <label for="evt-date">Date</label>
+          <div>
+            <label for="evt-date">Date</label>
+            <div class="field-icon">
+              <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3.5" y="5" width="17" height="15" rx="3" />
+                <path d="M3.5 9.5 H20.5" />
+                <path d="M8 3.2 V6.6 M16 3.2 V6.6" />
+              </svg>
               <input id="evt-date" type="date" />
             </div>
+          </div>
+          <div class="row" style="gap:12px; align-items:flex-start">
             <div style="flex:1; min-width:0">
               <label for="evt-time">Start time <span class="muted">(optional)</span></label>
-              <input id="evt-time" type="time" />
+              <div class="field-icon">
+                <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="M12 7.4 V12 L15.2 14" />
+                </svg>
+                <input id="evt-time" type="time" />
+              </div>
+            </div>
+            <div style="flex:1; min-width:0">
+              <label for="evt-end-time">End time <span class="muted">(optional)</span></label>
+              <div class="field-icon">
+                <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="8.5" />
+                  <path d="M12 7.4 V12 L15.2 14" />
+                </svg>
+                <input id="evt-end-time" type="time" />
+              </div>
             </div>
           </div>
           <div>
@@ -145,6 +158,12 @@
           <button id="evt-submit" type="submit" class="btn primary block">Add to calendar</button>
         </form>
       </section>
+
+      <!-- Proactive ideas — placed BELOW New request so New request is the first thing on screen -->
+      <div id="ideas-section" class="hidden">
+        <div class="section-label">Ideas for you</div>
+        <div id="ideas-list"></div>
+      </div>
 
       <!-- Your requests -->
       <div class="section-label">Your requests</div>

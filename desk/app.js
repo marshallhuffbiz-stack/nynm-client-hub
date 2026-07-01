@@ -176,7 +176,7 @@ function brandAvatar(client, clientId) {
   return el("div", { class: "brandmark mono" }, initials(name));
 }
 
-const TYPE_LABEL = { post: "Post", website: "Website", design: "Design", "event-promo": "Event promo" };
+const TYPE_LABEL = { post: "Post", website: "Website", design: "Design", "event-promo": "Event promo", other: "Other" };
 function typeLabel(t) { return TYPE_LABEL[t] || t || "Request"; }
 
 // stage -> { label, badge-class }
@@ -808,13 +808,16 @@ function renderEvents() {
 
 function eventCard(e) {
   const d = fmtEventDate(e.date);
+  const startT = fmtTime(e.time);
+  const endT = fmtTime(e.endTime);
+  const timeText = startT ? (endT ? `${startT} – ${endT}` : startT) : "";
   const card = el("div", { class: "card" });
 
   card.append(el("div", { class: "req-head" },
     brandAvatar(state.clientById[e.clientId], e.clientId),
     el("div", { class: "req-headtext" },
       el("div", { class: "req-client" }, clientName(e.clientId)),
-      el("div", { class: "evt-date" }, d.main + (fmtTime(e.time) ? ` at ${fmtTime(e.time)}` : ""), el("span", { class: "yr" }, d.yr))
+      el("div", { class: "evt-date" }, d.main + (timeText ? ` at ${timeText}` : ""), el("span", { class: "yr" }, d.yr))
     ),
     e.promoted ? el("span", { class: "badge go" }, "Promoted") : false
   ));

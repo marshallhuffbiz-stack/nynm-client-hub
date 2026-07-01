@@ -90,12 +90,10 @@ const typeChips = $("type-chips");
 const requestForm = $("request-form");
 const eventForm = $("event-form");
 
-const reqTitle = $("req-title");
 const reqDesc = $("req-desc");
 const reqDescLabel = $("req-desc-label");
 const reqFiles = $("req-files");
 const reqCamera = $("req-camera");
-const reqVoice = $("req-voice");
 const reqSubmit = $("req-submit");
 const thumbsEl = $("thumbs");
 const uploadStatus = $("upload-status");
@@ -103,6 +101,7 @@ const uploadStatus = $("upload-status");
 const evtTitle = $("evt-title");
 const evtDate = $("evt-date");
 const evtTime = $("evt-time");
+const evtEndTime = $("evt-end-time");
 const evtDesc = $("evt-desc");
 const evtSubmit = $("evt-submit");
 
@@ -128,6 +127,10 @@ const DESC_HINTS = {
   design: {
     label: "What do you need designed?",
     placeholder: "What do you need designed? e.g. A menu graphic for our new summer specials",
+  },
+  other: {
+    label: "What do you need?",
+    placeholder: "Send a photo or tell us anything — we'll take it from there.",
   },
 };
 
@@ -160,6 +163,7 @@ const TYPE_LABELS = {
   design: "Design",
   "event-promo": "Event promo",
   event: "Event",
+  other: "Other",
 };
 
 /* ---------- state ---------- */
@@ -329,7 +333,9 @@ function renderEvents(events) {
     const title = esc((evt && evt.title) || "Event");
     const date = formatDate(evt && evt.date);
     const time = formatTime(evt && evt.time);
-    const when = date ? `${date}${time ? ` at ${time}` : ""}` : "";
+    const endTime = formatTime(evt && evt.endTime);
+    const timeText = time ? (endTime ? `${time} – ${endTime}` : time) : "";
+    const when = date ? `${date}${timeText ? ` at ${timeText}` : ""}` : "";
     const desc = (evt && evt.description) ? esc(evt.description) : "";
     return `
       <div class="card">
@@ -418,8 +424,6 @@ function selectType(type) {
 /* ---------- form reset ---------- */
 
 function resetRequestForm() {
-  if (recording) stopVoice();
-  reqTitle.value = "";
   reqDesc.value = "";
   reqFiles.value = "";
   reqCamera.value = "";
@@ -433,6 +437,7 @@ function resetEventForm() {
   evtTitle.value = "";
   evtDate.value = "";
   evtTime.value = "";
+  evtEndTime.value = "";
   evtDesc.value = "";
 }
 
@@ -473,77 +478,6 @@ async function uploadOne(file) {
   }
 }
 
-/* ---------- voice note: record audio + best-effort on-device transcription ---------- */
-let mediaRecorder = null;
-let recChunks = [];
-let recognizer = null;
-let recording = false;
-
-async function toggleVoice() {
-  if (recording) { stopVoice(); return; }
-  let stream;
-  try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  } catch (err) {
-    toast("Allow microphone access to leave a voice note.");
-    return;
-  }
-  let mr;
-  try { mr = new MediaRecorder(stream); }
-  catch (err) { toast("Voice notes aren't supported on this browser."); stream.getTracks().forEach((t) => t.stop()); return; }
-  mediaRecorder = mr;
-  recChunks = [];
-  mr.ondataavailable = (e) => { if (e.data && e.data.size) recChunks.push(e.data); };
-  mr.onstop = async () => {
-    stream.getTracks().forEach((t) => t.stop());
-    const type = mr.mimeType || "audio/webm";
-    const ext = /mp4|aac|m4a/.test(type) ? "m4a" : "webm";
-    const blob = new Blob(recChunks, { type });
-    if (blob.size > 0) await uploadOne(new File([blob], `voice-note-${Date.now()}.${ext}`, { type }));
-  };
-  mr.start();
-  startRecognition();
-  recording = true;
-  reqVoice.textContent = "Stop recording";
-  reqVoice.classList.add("recording");
-  uploadStatus.textContent = "Recording, tap stop when done.";
-}
-
-function stopVoice() {
-  recording = false;
-  reqVoice.textContent = "Voice note";
-  reqVoice.classList.remove("recording");
-  try { if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop(); } catch (e) { /* ignore */ }
-  try { if (recognizer) recognizer.stop(); } catch (e) { /* ignore */ }
-}
-
-// Live speech-to-text where the browser supports it; no-ops where it doesn't
-// (the recorded audio is always attached as the reliable fallback).
-function startRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { recognizer = null; return; }
-  try {
-    recognizer = new SR();
-    recognizer.lang = navigator.language || "en-US";
-    recognizer.continuous = true;
-    recognizer.interimResults = false;
-    recognizer.onresult = (ev) => {
-      let add = "";
-      for (let i = ev.resultIndex; i < ev.results.length; i++) {
-        if (ev.results[i].isFinal) add += ev.results[i][0].transcript;
-      }
-      if (add) {
-        const sep = reqDesc.value && !/\s$/.test(reqDesc.value) ? " " : "";
-        reqDesc.value = (reqDesc.value + sep + add.trim()).trim();
-      }
-    };
-    recognizer.onerror = () => { /* transcription unavailable; the audio still attaches */ };
-    recognizer.start();
-  } catch (e) {
-    recognizer = null;
-  }
-}
-
 function updateUploadStatus() {
   if (uploadingCount > 0) {
     uploadStatus.textContent = `Uploading ${uploadingCount}…`;
@@ -565,14 +499,9 @@ async function submitRequest(event) {
   event.preventDefault();
   if (busy) return;
 
-  if (recording) {
-    stopVoice();
-    toast("Saving your voice note, tap Submit again in a moment.");
-    return;
-  }
   let description = reqDesc.value.trim();
   if (!description && pendingAttachments.length === 0) {
-    toast("Add a short note, a photo, or a voice note so we know what you need.");
+    toast("Add a short note or a photo so we know what you need.");
     reqDesc.focus();
     return;
   }
@@ -587,7 +516,7 @@ async function submitRequest(event) {
     if (!pendingSubmitId) pendingSubmitId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `c_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     const res = await api.submit({
       type: selectedType,
-      title: reqTitle.value.trim(),
+      title: "",
       description,
       attachments: pendingAttachments.slice(),
     }, pendingSubmitId);
@@ -631,6 +560,7 @@ async function submitEvent(event) {
       title,
       date,
       time: evtTime.value.trim(),
+      endTime: evtEndTime.value.trim(),
       description: evtDesc.value.trim(),
     });
     if (res && res.ok) {
@@ -803,7 +733,6 @@ requestForm.addEventListener("submit", submitRequest);
 eventForm.addEventListener("submit", submitEvent);
 reqFiles.addEventListener("change", () => onFilesPicked(reqFiles));
 reqCamera.addEventListener("change", () => onFilesPicked(reqCamera));
-reqVoice.addEventListener("click", toggleVoice);
 $("view-pin").addEventListener("submit", onPinSubmit);
 
 // Tap an attachment preview to view it full size.
