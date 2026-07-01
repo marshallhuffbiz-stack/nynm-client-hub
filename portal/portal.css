@@ -1,5 +1,18 @@
 /* Portal-specific styles. iOS 17/18 language. Base system lives in ../shared/ui.css. */
 
+/* ===================== Brand logo in the large-title header ===================== */
+.portal-brand-logo {
+  display: block;
+  width: 72px; height: 72px;
+  border-radius: 18px;           /* squircle — matches iOS app-icon radius at this size */
+  object-fit: contain;
+  background: var(--card);
+  border: 0.5px solid var(--separator);
+  box-shadow: var(--depth-1);
+  padding: 6px;
+  margin-bottom: 14px;
+}
+
 /* Hide the native file input; the styled <label class="btn"> drives it. */
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;

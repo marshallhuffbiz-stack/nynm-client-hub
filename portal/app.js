@@ -74,6 +74,13 @@ const views = {
 };
 
 const clientNameEl = $("client-name");
+const brandLogoEl  = $("brand-logo");
+
+// Brand logos bundled in the repo — keyed by clientId (same slugs as the Desk).
+const BRAND_LOGOS = {
+  "the-o":       "../shared/brands/the-o.png",
+  "eats-on-601": "../shared/brands/eats-on-601.png",
+};
 
 const typeChips = $("type-chips");
 const requestForm = $("request-form");
@@ -650,6 +657,17 @@ function applyData(data) {
   const client = (data && data.client) || {};
   const name = client.name || "Your business";
   clientNameEl.textContent = name;
+
+  // Show the brand logo above the title when we have one for this client.
+  if (brandLogoEl) {
+    const logoSrc = BRAND_LOGOS[client.brandSlug] || BRAND_LOGOS[client.clientId] || "";
+    if (logoSrc) {
+      brandLogoEl.src = logoSrc;
+      brandLogoEl.alt = name;
+      brandLogoEl.classList.remove("hidden");
+    }
+  }
+
   document.querySelector(".large-title")?.classList.remove("hidden");
   document.title = `${name} · Relay`;
   renderRequests(data && data.requests);
