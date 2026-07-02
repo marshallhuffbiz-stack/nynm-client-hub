@@ -10,6 +10,7 @@ import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiUpdate, apiUpload, apiFetchAll } from "./writeback.mjs";
 import { errorPatch } from "./wb-core.mjs";
+import { makeNotifier } from "./notify.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(await readFile(join(HERE, "config.json"), "utf8"));
@@ -79,5 +80,18 @@ switch (cmd) {
 }
 
 const res = await apiUpdate(cfg.execUrl, cfg.adminToken, id, patch);
+
+// A staged draft is the moment Marshall can act — push it to his phone. Best-effort:
+// a failed push must never fail the writeback (the draft is already staged).
+if (cmd === "ready" && res && res.ok !== false) {
+  try {
+    const row = res.request || {};
+    await makeNotifier(cfg).notifyReady({
+      clientId: row.clientId || "",
+      title: row.title || (patch.draft && patch.draft.caption ? String(patch.draft.caption).slice(0, 60) : "draft"),
+    });
+  } catch { /* non-fatal */ }
+}
+
 console.log(JSON.stringify(res));
 process.exit(res.ok ? 0 : 1);

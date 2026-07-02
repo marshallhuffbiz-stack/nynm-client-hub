@@ -1,18 +1,11 @@
 {
   "permissions": {
-    "defaultMode": "acceptEdits",
-    "allow": [
-      "Read", "Edit", "Write", "Glob", "Grep", "TodoWrite", "WebSearch", "WebFetch", "Agent", "ToolSearch",
-      "Skill(branded-social-post)", "Skill(branded-collateral)", "Skill(imagery)", "Skill(chatgpt-image)", "Skill(image2)", "Skill(retouch)",
-      "Bash(node:*)", "Bash(npx:*)", "Bash(playwright-cli:*)", "Bash(mkdir:*)", "Bash(cp:*)", "Bash(mv:*)", "Bash(ls:*)",
-      "Bash(cat:*)", "Bash(chmod:*)", "Bash(which:*)", "Bash(echo:*)", "Bash(python3:*)", "Bash(wc:*)", "Bash(grep:*)", "Bash(sips:*)", "Bash(ffmpeg:*)",
-      "mcp__codex__*", "mcp__visualize__*"
-    ],
+    "defaultMode": "bypassPermissions",
     "deny": [
-      "Bash(curl:*)", "Bash(wget:*)", "Bash(postiz:*)", "Bash(git:*)", "Bash(gh:*)", "Bash(launchctl:*)",
-      "Bash(security:*)", "Bash(sudo:*)", "Bash(rm:*)", "Bash(open:*)", "Bash(osascript:*)",
+      "Bash(postiz:*)", "Bash(git push:*)", "Bash(gh:*)", "Bash(launchctl:*)",
+      "Bash(security:*)", "Bash(sudo:*)",
       "Skill(post)", "Skill(publish-product)"
     ]
   },
-  "_comment": "Drain stages drafts only. branded-social-post/imagery/etc. allowed; outward/destructive (post, publish, git, curl, postiz, launchctl) denied. Shipping (Skill(post)) is a separate approved step."
+  "_comment": "Drain runs with FULL desktop-equivalent access (2026-07-02, per Marshall: no sandbox/approval limits, all skills + brands + tools available) EXCEPT the outward hard lines, which deny rules enforce even in bypass mode: publishing (postiz CLI, Skill(post), publish-product), pushing code (git push, gh), and system/credential surfaces (launchctl, security, sudo). Drafts are staged for review in the Desk; shipping stays a separate approved step."
 }

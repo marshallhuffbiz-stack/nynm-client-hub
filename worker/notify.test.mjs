@@ -43,3 +43,17 @@ test("pushNotify wires Click/Priority into the ntfy request (and honors config.p
   assert.equal(calls[1].init.headers.Click, "https://me.example/desk/");
   assert.equal(calls[1].init.headers.Priority, undefined);
 });
+
+test("notifyReady pushes a review prompt with client + title", async () => {
+  const calls = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true }; };
+  try {
+    const { makeNotifier } = await import("./notify.mjs");
+    const n = makeNotifier({ push: { mode: "ntfy", url: "https://ntfy.sh/t" } });
+    await n.notifyReady({ clientId: "eats-on-601", title: "July calendar" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].opts.headers.Title, "Draft ready for your review");
+    assert.match(String(calls[0].opts.body), /eats-on-601: "July calendar"/);
+  } finally { globalThis.fetch = origFetch; }
+});

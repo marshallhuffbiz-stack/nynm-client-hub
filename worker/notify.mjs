@@ -69,6 +69,12 @@ export function makeNotifier(config = {}) {
       await macNotify(title, msg);
       await pushNotify(push, title, msg);
     },
+    async notifyReady(req) {
+      const title = "Draft ready for your review";
+      const msg = `${req.clientId}: "${req.title}" is staged on the Desk. Tap to review and approve.`;
+      await macNotify(title, msg);
+      await pushNotify(push, title, msg);
+    },
     async notifyDigest(summary) {
       const title = "Client Hub — daily digest";
       const head = `${summary.open} open request${summary.open === 1 ? "" : "s"}.`;
