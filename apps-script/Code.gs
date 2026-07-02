@@ -61,6 +61,8 @@ var STAGES = [
 ];
 
 // Mirror of core/model.mjs TRANSITIONS  (stage:action -> next stage).
+// [V7] The "requeue" action is handled OUTSIDE this table (handleUpdateRequest_):
+// allowed only from error/shipping, target decided by planRequeue_().
 var TRANSITIONS = {
   "submitted:send": "queued",
   "queued:start": "drafting",
@@ -310,6 +312,71 @@ function mergePatch_(current, patch, nowIso) {
   for (k in patch) { if (patch.hasOwnProperty(k)) out[k] = patch[k]; }
   out.updatedAt = nowIso || now_();
   return out;
+}
+
+// [V7] "19:30" -> "7:30 PM" (promo descriptions read like copy, not timestamps).
+// Mirrors fmt12() in mock-server/server.mjs.
+function fmt12_(hhmm) {
+  var m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m) return "";
+  var h = Number(m[1]);
+  return (h % 12 || 12) + ":" + m[2] + " " + (h >= 12 ? "PM" : "AM");
+}
+
+// [V7] Server-side deep-merge for request `meta` — mirrors mergeMeta() in
+// mock-server/server.mjs. A writeback that patches meta must MERGE, not clobber:
+// workers send meta computed from a fetch minutes old, and a wholesale overlay
+// silently dropped thread messages, the activity entry the server just appended,
+// notified flags, and idempotency keys. Rules: thread/activity arrays union-append
+// (dedupe identical entries, sort by `at`); nested plain objects (e.g. run)
+// shallow-merge with patch winning per key; scalars overwrite.
+function mergeMeta_(cur, patch) {
+  cur = cur || {};
+  patch = patch || {};
+  var out = {};
+  var k;
+  for (k in cur) { if (cur.hasOwnProperty(k)) out[k] = cur[k]; }
+  for (k in patch) {
+    if (!patch.hasOwnProperty(k)) continue;
+    var v = patch[k];
+    var curV = out[k];
+    if ((k === "thread" || k === "activity") && isArray_(v) && isArray_(curV)) {
+      var seen = {};
+      var merged = curV.slice();
+      var i;
+      for (i = 0; i < curV.length; i++) seen[JSON.stringify(curV[i])] = true;
+      for (i = 0; i < v.length; i++) {
+        if (!seen[JSON.stringify(v[i])]) merged.push(v[i]);
+      }
+      merged.sort(function (a, b) {
+        var aAt = String((a && a.at) || "");
+        var bAt = String((b && b.at) || "");
+        return aAt < bAt ? -1 : aAt > bAt ? 1 : 0;
+      });
+      out[k] = merged;
+    } else if (v && typeof v === "object" && !isArray_(v) && curV && typeof curV === "object" && !isArray_(curV)) {
+      var m = {};
+      var mk;
+      for (mk in curV) { if (curV.hasOwnProperty(mk)) m[mk] = curV[mk]; }
+      for (mk in v) { if (v.hasOwnProperty(mk)) m[mk] = v[mk]; }
+      out[k] = m;
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
+
+// [V7] mirror planRequeue() in core/model.mjs: what a "Retry / requeue" of a failed
+// request should do. A failure AFTER approval (run.phase === "publish": Postiz blip,
+// shipper crash, interrupted publish) still has a reviewed, approved draft — requeue
+// it to the SHIP lane (stage "approved", draft KEPT) instead of wiping the creative
+// and burning another drafting run. Anything else conservatively re-queues for a
+// fresh draft.
+function planRequeue_(request) {
+  var run = (request && request.meta && request.meta.run) || {};
+  if (run.phase === "publish" && request.draft) return { stage: "approved" };
+  return { stage: "queued", draft: null };
 }
 
 // mirror publicClient(): strip secrets before sending to the portal.
@@ -665,10 +732,23 @@ function handleUpdateRequest_(body) {
 
   if (patch.action) {
     var nxt;
-    try {
-      nxt = nextStage_(cur.stage, patch.action);
-    } catch (transErr) {
-      return { code: 409, obj: { ok: false, error: transErr.message } };
+    if (patch.action === "requeue") {
+      // [V7] First-class retry: only errored or stuck-shipping rows may requeue.
+      // planRequeue_ decides the safe target — a publish-phase failure with an
+      // approved draft goes back to "approved" KEEPING the draft (no re-drafting
+      // run burned); anything else re-queues for a fresh draft.
+      if (cur.stage !== "error" && cur.stage !== "shipping") {
+        return { code: 409, obj: { ok: false, error: "illegal transition: " + cur.stage + " --requeue-->" } };
+      }
+      var plan = planRequeue_(cur);
+      nxt = plan.stage;
+      if (plan.hasOwnProperty("draft")) patch.draft = plan.draft;
+    } else {
+      try {
+        nxt = nextStage_(cur.stage, patch.action);
+      } catch (transErr) {
+        return { code: 409, obj: { ok: false, error: transErr.message } };
+      }
     }
     patch.stage = nxt;
     var act = patch.action;
@@ -685,8 +765,20 @@ function handleUpdateRequest_(body) {
       run.error = "";
       cur.meta.run = run;
     }
+    // [V7] A requeue clears the stale error so the Desk stops showing it.
+    if (act === "requeue") {
+      var rerun = cur.meta.run || {};
+      rerun.error = "";
+      cur.meta.run = rerun;
+    }
   }
   delete patch._note;
+
+  // [V7] Deep-merge (never clobber) any meta carried by the patch — preserves
+  // thread/activity/notified/clientRequestId written since the caller's fetch.
+  if (patch.meta && typeof patch.meta === "object" && !isArray_(patch.meta)) {
+    patch.meta = mergeMeta_(cur.meta || {}, patch.meta);
+  }
 
   var merged = mergePatch_(cur, patch, now_());
   writeRow_(SHEET_REQUESTS, cur.__row, merged);
@@ -701,13 +793,20 @@ function handlePromoteEvent_(body) {
   }
   if (!ev) return { code: 404, obj: { ok: false, error: "event not found" } };
 
+  // [V7] Carry the start/end times the client entered into the promo brief —
+  // the whole point of collecting them is a post that says "7–10 PM".
+  var when = "";
+  if (ev.time && ev.endTime) when = ", " + fmt12_(ev.time) + "–" + fmt12_(ev.endTime);
+  else if (ev.time) when = ", starting " + fmt12_(ev.time);
+  else if (ev.endTime) when = ", until " + fmt12_(ev.endTime);
+
   var id = genId_("req");
   var rec = {
     id: id,
     clientId: ev.clientId,
     type: "event-promo",
     title: "Promote: " + ev.title,
-    description: (ev.title + " on " + ev.date + ". " + (ev.description || "")).trim(),
+    description: (ev.title + " on " + ev.date + when + ". " + (ev.description || "")).trim(),
     attachments: [],
     eventId: ev.eventId,
     stage: "submitted",

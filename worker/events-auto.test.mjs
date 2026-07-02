@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { slugify, eventKey, etOffset, etIso, dayOfPostIso, isConfident, buildSiteEvent, mergeSiteEvents, mightHaveDate } from "./events-auto.mjs";
+import { slugify, eventKey, etOffset, etIso, dayOfPostIso, isConfident, buildSiteEvent, mergeSiteEvents, mightHaveDate, to24h } from "./events-auto.mjs";
 
 const NOW = new Date("2026-06-22T12:00:00Z");
 
@@ -83,4 +83,29 @@ test("mergeSiteEvents: appends new, replaces same id in place, idempotent", () =
   const merged = mergeSiteEvents(once, updated);
   assert.equal(merged.length, 2);
   assert.equal(merged.find((e) => e.id === entry.id).description, "changed");
+});
+
+test("to24h converts extractor-style human times to HH:MM:SS", () => {
+  assert.equal(to24h("11 AM"), "11:00:00");
+  assert.equal(to24h("4 PM"), "16:00:00");
+  assert.equal(to24h("11:30 AM"), "11:30:00");
+  assert.equal(to24h("7:05 pm"), "19:05:00");
+  assert.equal(to24h("12 PM"), "12:00:00"); // noon
+  assert.equal(to24h("12 AM"), "00:00:00"); // midnight
+  assert.equal(to24h("19:30"), "19:30:00"); // already 24-hour HH:MM
+  assert.equal(to24h(""), "");
+  assert.equal(to24h("whenever"), "");
+  assert.equal(to24h(null), "");
+});
+
+test("buildSiteEvent derives isoDate's time from timeStart (startTime24 had no caller — every entry got 09:00)", () => {
+  const e = buildSiteEvent({ title: "AP Southern Kitchen", ymd: "2026-06-28", timeStart: "11 AM", timeEnd: "4 PM" });
+  assert.ok(e.isoDate.startsWith("2026-06-28T11:00:00"), `isoDate carries the real start time, got ${e.isoDate}`);
+});
+
+test("buildSiteEvent: explicit startTime24 still wins; no time at all falls back to 09:00", () => {
+  const explicit = buildSiteEvent({ title: "X", ymd: "2026-07-04", startTime24: "18:30:00", timeStart: "11 AM" });
+  assert.ok(explicit.isoDate.startsWith("2026-07-04T18:30:00"));
+  const none = buildSiteEvent({ title: "X", ymd: "2026-07-04" });
+  assert.ok(none.isoDate.startsWith("2026-07-04T09:00:00"));
 });

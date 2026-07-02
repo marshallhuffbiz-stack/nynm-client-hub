@@ -18,7 +18,7 @@
   appearance: none; -webkit-appearance: none; border: none; background: transparent;
   color: var(--label-2);
   font-family: var(--font); font-weight: 500; font-size: 14px; letter-spacing: -0.2px;
-  padding: 6px 8px; min-height: 40px; border-radius: 8px; cursor: pointer;
+  padding: 6px 8px; min-height: 44px; border-radius: 8px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
               box-shadow var(--dur-fast) var(--ease);
@@ -39,9 +39,28 @@
 .tab.active .tab-count { background: var(--blue-fill); color: var(--blue); }
 .tab-count:empty { display: none; }
 
-/* ===================== Filters ===================== */
-.filters { margin-bottom: 14px; }
-.filters .row + .row { margin-top: 8px; }
+/* ===================== Filters — one scrollable chip rail ===================== */
+.filters { margin-bottom: 12px; }
+.chip-row {
+  display: flex; align-items: center; gap: 8px;
+  overflow-x: auto; overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  padding: 4px 0; /* room so the focus glow isn't clipped by the scroll box */
+  scrollbar-width: none;
+  /* subtle edge fade hints there's more rail to the right */
+  -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 28px), transparent 100%);
+          mask-image: linear-gradient(90deg, transparent 0, #000 8px, #000 calc(100% - 28px), transparent 100%);
+}
+.chip-row::-webkit-scrollbar { display: none; height: 0; }
+.chip-row .chip { flex: none; white-space: nowrap; }
+/* the most-tapped controls on the phone; 44pt minimum tap target */
+.chip-row .chip.sm { min-height: 44px; }
+/* hairline between the stage chips and the client chips */
+.chip-sep { flex: none; width: 1px; height: 22px; background: var(--separator); margin: 0 4px; }
+/* wide screens: let the rail wrap instead of scrolling, drop the fade */
+@media (min-width: 900px) {
+  .chip-row { flex-wrap: wrap; overflow: visible; -webkit-mask-image: none; mask-image: none; }
+}
 
 /* ===================== Request card ===================== */
 .req-head { display: flex; align-items: flex-start; gap: 12px; }
@@ -49,6 +68,9 @@
 .req-headtext { flex: 1; min-width: 0; }
 .req-client { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); line-height: 1.22; }
 .req-when { color: var(--label-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+/* time-in-stage readout; turns orange when a needs-you/drafting item sits >24h */
+.req-stagetime { color: var(--label-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.req-stagetime.stale { color: var(--orange); font-weight: 600; }
 .req-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
 .req-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; margin: 14px 0 4px; }
 .req-desc { color: var(--label); font-size: 16px; letter-spacing: -0.2px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
@@ -57,7 +79,7 @@
 /* per-request delete control — quiet by default, destructive red on hover/focus */
 .req-del {
   margin-left: auto; align-self: flex-start; flex: none;
-  width: 40px; height: 40px; border-radius: var(--r-button-sm);
+  width: 44px; height: 44px; border-radius: var(--r-button-sm);
   display: grid; place-items: center; cursor: pointer;
   border: none; background: transparent; color: var(--label-3);
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform 120ms var(--ease);
@@ -70,6 +92,45 @@
 /* card that is done reads quieter */
 .card.is-done { opacity: 0.6; }
 .card.is-done .req-title { font-weight: 500; }
+
+/* ===================== Compact head + expandable body ===================== */
+/* The head is the toggle; the heavy action surface lives in .req-body below. */
+.req-card > .req-head { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+
+/* chevron affordance — a real button, 44pt tall */
+.req-expand {
+  flex: none; width: 36px; height: 44px; margin-left: 2px;
+  display: grid; place-items: center; cursor: pointer;
+  border: none; background: transparent; color: var(--label-3);
+  border-radius: var(--r-button-sm);
+}
+.req-expand svg { width: 18px; height: 18px; display: block; transition: transform var(--dur-fast) var(--ease); }
+.req-card.is-open .req-expand svg { transform: rotate(180deg); }
+.req-expand:focus-visible { outline: none; box-shadow: var(--focus-glow); }
+
+/* collapsed: clamp the description to two lines, tighten the title */
+.req-card:not(.is-open) .req-title { margin: 10px 0 2px; }
+.req-card:not(.is-open) .req-desc {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden;
+}
+
+/* one-line staged-draft peek on a collapsed card */
+.req-peek {
+  margin-top: 8px; color: var(--label-2); font-size: 14px; letter-spacing: -0.2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.req-card.is-open .req-peek { display: none; }
+
+/* the expandable body */
+.req-card:not(.is-open) .req-body { display: none; }
+/* Animate only interactive opens (.do-anim set by the toggle handler). Cards
+   rendered already-open show instantly - a frozen animation (background tab)
+   must never leave the body stuck at opacity 0. */
+.req-card.is-open.do-anim .req-body { animation: rise-in 0.32s var(--ease) both; }
+@media (prefers-reduced-motion: reduce) {
+  .req-card.is-open.do-anim .req-body { animation: none; }
+  .req-expand svg { transition: none; }
+}
 
 /* ===================== Action area ===================== */
 .act { margin-top: 16px; padding-top: 16px; border-top: 0.5px solid var(--separator); }
@@ -97,6 +158,15 @@
   margin-top: 12px; line-height: 1.4;
 }
 .notebox strong { font-weight: 600; color: var(--orange); }
+/* error callout pops red: a failed publish is the one state that costs money */
+.notebox.err { background: var(--red-fill); }
+.notebox.err strong { color: var(--red); }
+
+/* inline change-note editor on a ready card (replaces window.prompt) */
+.changenote { margin-top: 14px; display: grid; gap: 6px; }
+.changenote.hidden { display: none; }
+.changenote textarea { min-height: 84px; }
+.changenote label { margin-bottom: 0; }
 
 /* ===================== Staged-draft review (recessed inset, not a nested card) ===================== */
 .draft {
@@ -126,6 +196,7 @@
   font-variant-numeric: tabular-nums;
 }
 .evt-date .yr { color: var(--label-3); font-weight: 400; font-size: 13px; }
+.card.is-past { opacity: 0.55; } /* past events sink to the bottom, dimmed */
 
 /* ===================== Clients ===================== */
 .client-id { font-size: 13px; color: var(--label-2); font-variant-numeric: tabular-nums; letter-spacing: -0.1px; }
@@ -135,6 +206,19 @@
   color: var(--label-2); background: var(--bg); border-color: transparent;
 }
 .linkrow .btn { flex: none; }
+
+/* small buttons still get a 44pt minimum tap target on the desk */
+.btn.sm { min-height: 44px; }
+
+/* ===================== Small screens: first card above the fold ===================== */
+@media (max-width: 640px) {
+  .wrap { padding-top: 12px; }
+  .large-title { padding: 2px 4px 8px; }
+  .large-title .large-sub { margin-top: 2px; }
+  .tabs { margin: 0 0 14px; }
+  .filters { margin-bottom: 8px; }
+  .card { padding: 14px; margin-bottom: 12px; }
+}
 
 /* ===================== Misc ===================== */
 code {

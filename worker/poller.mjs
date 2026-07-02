@@ -9,7 +9,7 @@ import { existsSync, readFileSync, unlinkSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
-import { detectJobs, shouldRunDigest, detectOrphans, planOrphanRecovery } from "./jobs.mjs";
+import { detectJobs, shouldRunDigest, detectOrphans, planOrphanRecovery, enrichJobs } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
 import { apiFetchAll, apiUpdate } from "./writeback.mjs";
 import { makeNotifier } from "./notify.mjs";
@@ -44,13 +44,15 @@ export async function runOnce({
   const reqs = all.requests || [];
 
   // Recover orphaned 'drafting' rows (a drain that died / ran out of space mid-render,
-  // or a manual Retry that landed in 'drafting') by re-queueing them so they aren't
-  // stranded with no live drain to finish them. Capped per-row (planOrphanRecovery) so
-  // a permanently-failing request surfaces a real error instead of looping forever.
+  // or a manual Retry that landed in 'drafting') by re-queueing them, and orphaned
+  // 'shipping' rows (shipper died mid-publish / done-writeback lost) by re-approving
+  // them into the ship lane WITH their approved draft. Capped per-row
+  // (planOrphanRecovery) so a permanently-failing request surfaces a real error
+  // instead of looping forever.
   let recovered = 0;
   for (const a of planOrphanRecovery(detectOrphans(reqs, now, orphanMaxAgeMs), maxRequeues)) {
     const res = await apiUpdate(apiBase, adminToken, a.id, a.patch);
-    if (res && res.ok !== false && a.patch.stage === "queued") recovered += 1;
+    if (res && res.ok !== false && (a.patch.stage === "queued" || a.patch.stage === "approved")) recovered += 1;
   }
 
   const jobs = detectJobs(reqs, caps);
@@ -83,9 +85,20 @@ export async function runOnce({
   const socialShips = (shipper ? jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type)) : []).slice(0, shipCap);
   const drainShips = (shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships).slice(0, shipCap);
 
+  // Drain jobs go out ENRICHED (client join: brandSlug/siteFolder/clientName; event
+  // join: start/end times) — see enrichJobs. Raw rows have none of that, and drain.md
+  // instructs a brand-less job to use a "neutral treatment".
   let drainResult = { drafted: 0, shipped: 0 };
   if (jobs.drafts.length || drainShips.length) {
-    drainResult = (await drainer({ apiBase, adminToken, drafts: jobs.drafts, ships: drainShips })) || drainResult;
+    const clients = all.clients || [];
+    const events = all.events || [];
+    drainResult =
+      (await drainer({
+        apiBase,
+        adminToken,
+        drafts: enrichJobs(jobs.drafts, clients, events),
+        ships: enrichJobs(drainShips, clients, events),
+      })) || drainResult;
   }
 
   let shipResult = { shipped: 0, failed: 0 };

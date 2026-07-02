@@ -18,8 +18,12 @@
     <key>HOME</key>
     <string>/Users/MarshallHuff</string>
   </dict>
+  <!-- Poll cadence (seconds). THE knob for reaction latency: every human interaction
+       (submit, Send to Claude, approve) waits up to one full interval. A tick with no
+       work is a single ~1s GET — far under Apps Script quota — so 90s is cheap.
+       To change: edit here, re-copy to ~/Library/LaunchAgents, bootout + bootstrap. -->
   <key>StartInterval</key>
-  <integer>300</integer>
+  <integer>90</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>

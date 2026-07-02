@@ -143,6 +143,19 @@ export function validatePin(client = {}, pin) {
   return String(pin) === String(client.pin);
 }
 
+// What a "Retry / requeue" of an errored request should do. A failure AFTER approval
+// (run.phase === "publish": Postiz blip, shipper crash, interrupted publish) still has
+// a reviewed, approved draft — requeue it to the SHIP lane (stage "approved", draft
+// kept) instead of wiping the creative and burning another drafting run. Anything
+// else (draft-phase failures, legacy rows with no phase, or a publish error whose
+// draft is somehow gone) conservatively goes back to "queued" for a fresh draft.
+// The Desk's Retry button and any worker-side requeue should both use this.
+export function planRequeue(request = {}) {
+  const run = (request.meta && request.meta.run) || {};
+  if (run.phase === "publish" && request.draft) return { stage: "approved" };
+  return { stage: "queued", draft: null };
+}
+
 // Optimistic merge: overlay patch onto the freshest record, stamp updatedAt.
 export function mergePatch(current = {}, patch = {}, nowIso) {
   return { ...current, ...patch, updatedAt: nowIso || new Date().toISOString() };

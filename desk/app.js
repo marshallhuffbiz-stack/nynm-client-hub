@@ -5,6 +5,7 @@ import { API_MODE } from "../shared/config.js";
 import { openLightbox, makeZoomable } from "../shared/lightbox.js";
 import { resolveAccess, persistAccess, DESK_TOKEN_KEY } from "../shared/token.js";
 import { installLaunchManifest } from "../shared/pwa.js";
+import { dataCacheKey, readDataCache, writeDataCache } from "../shared/datacache.js";
 
 // Trash glyph for the per-request delete control (inline SVG, no icon font / emoji).
 const TRASH_SVG =
@@ -12,6 +13,12 @@ const TRASH_SVG =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
   '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>' +
   '<path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
+
+// Chevron glyph for the expand/collapse affordance on request cards.
+const CHEVRON_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M6 9l6 6 6-6"/></svg>';
 
 // localStorage, but never throw (private mode / blocked storage).
 function safeLocalStorage() {
@@ -29,6 +36,10 @@ const _access = resolveAccess({
 });
 const adminToken = _access.token;
 const api = deskApi(adminToken);
+
+// Stale-while-revalidate snapshot of the whole desk payload, keyed by the admin
+// token (same pattern the portal ships). Null token -> no caching.
+const DATA_CACHE_KEY = dataCacheKey("relay.desk.data", adminToken);
 
 // Recovered from storage → put it back in the address bar.
 if (adminToken && _access.source === "storage") {
@@ -114,9 +125,11 @@ function relTime(iso) {
 }
 
 function fmtEventDate(iso) {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return { main: iso || "Date to be set", yr: "" };
-  const d = new Date(t);
+  // "YYYY-MM-DD" parses as LOCAL midnight (matches the portal) — Date.parse would
+  // read it as UTC and show the previous day in US timezones.
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(Date.parse(iso));
+  if (Number.isNaN(d.getTime())) return { main: iso || "Date to be set", yr: "" };
   return {
     main: d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
     yr: String(d.getFullYear()),
@@ -189,9 +202,52 @@ const STAGE_META = {
   approved: { label: "Approved", cls: "go" },
   shipping: { label: "Publishing", cls: "go" },
   done: { label: "Done", cls: "go" },
-  error: { label: "Needs attention", cls: "warn" },
+  error: { label: "Needs attention", cls: "err" },
 };
 function stageMeta(s) { return STAGE_META[s] || { label: s || "·", cls: "bone" }; }
+
+// Stages that are waiting on Marshall, not on Claude or the worker. These drive
+// the queue ordering, the Requests tab badge, and the aging tint.
+const NEEDS_YOU_STAGES = new Set(["submitted", "changes", "ready", "error"]);
+// Sort tier: needs-you first, then in-flight, done last.
+function stageTier(s) {
+  if (NEEDS_YOU_STAGES.has(s)) return 0;
+  if (s === "done") return 2;
+  return 1;
+}
+
+// Cards render compact (head + summary) with the heavy action surface collapsed.
+// Needs-you stages that carry a one-tap action inside (Approve / Retry / change
+// note) start expanded so nothing gets slower; fresh submissions stay compact so
+// a morning triage of five requests is a scan, not a scroll. Derived from
+// NEEDS_YOU_STAGES minus "submitted".
+const AUTO_EXPAND_STAGES = new Set([...NEEDS_YOU_STAGES].filter((s) => s !== "submitted"));
+
+// Marshall's explicit open/closed choices, keyed by request id, remembered with
+// the stage they were made in. Survives poll re-renders; when the stage moves on
+// (e.g. drafting -> ready) the stage default takes over again.
+const cardExpandChoice = new Map();
+function isCardExpanded(r) {
+  const c = cardExpandChoice.get(r.id);
+  if (c && c.stage === r.stage) return c.expanded;
+  if (c) cardExpandChoice.delete(r.id); // stale: stage changed since the choice
+  return AUTO_EXPAND_STAGES.has(r.stage);
+}
+
+// "2 days" / "5 hr" / "12 min" elapsed since the given time; "" when under a
+// minute or unparsable. Used for the time-in-stage line on cards.
+function sinceShort(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  const m = Math.round((Date.now() - t) / 60000);
+  if (m < 1) return "";
+  if (m < 60) return `${m} min`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hr`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? "" : "s"}`;
+}
+const STALE_AFTER_MS = 24 * 60 * 60 * 1000; // needs-you/drafting older than this gets the attention tint
 
 // Filter buckets: which stages each chip covers.
 const STAGE_FILTERS = [
@@ -213,12 +269,36 @@ const state = {
   filterClient: "all",
   // dirty comment text the user typed but hasn't saved, keyed by request id
   draftComments: {},
+  // unsent change-note text (inline "Request changes" editor), keyed by request id.
+  // A key existing (even empty) means the editor is open for that request.
+  changeNotes: {},
 };
+
+// Persist view + filters across relaunches (iOS kills PWAs constantly; keep his place).
+const UI_STATE_KEY = "relay.desk.ui";
+(function hydrateUiState() {
+  const saved = readDataCache(safeLocalStorage(), UI_STATE_KEY);
+  if (!saved) return;
+  if (["requests", "events", "clients"].includes(saved.view)) state.view = saved.view;
+  if (STAGE_FILTERS.some((f) => f.key === saved.filterStage)) state.filterStage = saved.filterStage;
+  if (typeof saved.filterClient === "string" && saved.filterClient) state.filterClient = saved.filterClient;
+})();
+function saveUiState() {
+  writeDataCache(safeLocalStorage(), UI_STATE_KEY, {
+    view: state.view,
+    filterStage: state.filterStage,
+    filterClient: state.filterClient,
+  });
+}
 
 let isBusy = false; // a mutation is in flight — pause polling/re-render races
 let typingActive = false; // a comment box currently has focus
+// Bumped every time a mutation finishes. A poll that started before a mutation
+// compares this at resolve time and drops its (now stale) snapshot, so the UI
+// never visually reverts an Approve/Retry/Delete that just landed.
+let mutationEpoch = 0;
 
-function setBusy(v) { isBusy = v; }
+function setBusy(v) { isBusy = v; if (!v) mutationEpoch++; }
 
 // ---------- API wrapper with friendly errors ----------
 async function call(fn) {
@@ -257,11 +337,32 @@ function applyRequest(updated) {
 // ===================================================================
 async function loadInitial() {
   if (!adminToken) return showBadToken();
+
+  // Instant paint: render the last-known queue immediately while Apps Script
+  // cold-starts (3-5s), then revalidate in the background. Same
+  // stale-while-revalidate pattern the portal ships.
+  const cached = DATA_CACHE_KEY ? readDataCache(safeLocalStorage(), DATA_CACHE_KEY) : null;
+  const painted = !!(cached && cached.ok !== false && Array.isArray(cached.requests));
+  if (painted) {
+    ingest(cached);
+    showApp();
+    render();
+  }
+
+  const startedEpoch = mutationEpoch;
   let res;
   try { res = await api.load(); }
-  catch { res = { ok: false, error: "network" }; }
-  if (!res || res.status === 403 || res.ok === false) return showBadToken();
+  catch { res = null; }
+  if (!res || res.status === 403 || res.ok === false) {
+    // With a cached queue on screen, a failure here is far more likely a
+    // transient backend hiccup than a revoked token. Keep showing the data.
+    if (!painted) showBadToken();
+    return;
+  }
   rememberAccess();
+  if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
+  // A mutation landed while this load was in flight; its snapshot is stale.
+  if (mutationEpoch !== startedEpoch) return;
   ingest(res);
   showApp();
   render();
@@ -273,6 +374,8 @@ function ingest(res) {
   state.events = (Array.isArray(res.events) ? res.events : []).filter((e) => !HIDDEN_CLIENTS.has(e.clientId));
   state.clientById = {};
   for (const c of state.clients) state.clientById[c.clientId] = c;
+  // A persisted client filter may reference a client that no longer exists.
+  if (state.filterClient !== "all" && !state.clientById[state.filterClient]) state.filterClient = "all";
 }
 
 function showBadToken() {
@@ -291,10 +394,15 @@ function showApp() {
 // ===================================================================
 async function poll() {
   if (isBusy || typingActive || document.hidden) return; // skip this tick
+  const startedEpoch = mutationEpoch;
   let res;
   try { res = await api.load(); }
   catch { return; } // transient; try again next tick
   if (!res || res.status === 403 || res.ok === false) return;
+  // A mutation (Approve/Retry/Delete) landed while this poll was in flight; its
+  // snapshot predates the mutation and would visually revert the card. Drop it.
+  if (isBusy || mutationEpoch !== startedEpoch) return;
+  if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
   ingest(res);
   render();
 }
@@ -310,10 +418,11 @@ function clientName(clientId) {
 }
 
 function render() {
-  // counts
-  const openReq = state.requests.filter((r) => r.stage !== "done").length;
+  // counts — the Requests badge answers "how many things need ME right now",
+  // not "how much total work is in flight" (Claude's in-progress items don't count).
+  const needsYou = state.requests.filter((r) => NEEDS_YOU_STAGES.has(r.stage)).length;
   const unpromoted = state.events.filter((e) => !e.promoted).length;
-  $("#count-requests").textContent = openReq ? String(openReq) : "";
+  $("#count-requests").textContent = needsYou ? String(needsYou) : "";
   $("#count-events").textContent = unpromoted ? String(unpromoted) : "";
   $("#count-clients").textContent = state.clients.length ? String(state.clients.length) : "";
 
@@ -337,6 +446,7 @@ $("#tabs").addEventListener("click", (e) => {
   const tab = e.target.closest(".tab");
   if (!tab) return;
   state.view = tab.dataset.view;
+  saveUiState();
   render();
 });
 
@@ -344,39 +454,42 @@ $("#tabs").addEventListener("click", (e) => {
 // REQUESTS view
 // ===================================================================
 function renderFilters() {
-  // stage chips
-  const sc = $("#stage-chips");
-  sc.replaceChildren(
-    ...STAGE_FILTERS.map((f) =>
-      el("button", {
-        type: "button",
-        class: "chip sm" + (state.filterStage === f.key ? " active" : ""),
-        onclick: () => { state.filterStage = f.key; renderRequests(); },
-      }, f.label)
-    )
-  );
+  // One horizontally scrollable rail: stage chips, a hairline divider, then
+  // client chips (when more than one client exists). Saves a full row of
+  // viewport on the phone vs the old two wrapped rows.
+  const inClient = (r) => (state.filterClient === "all" ? true : r.clientId === state.filterClient);
+  const rail = $("#filter-chips");
+  const keepScroll = rail.scrollLeft;
 
-  // client chips (only when more than one client exists)
-  const cc = $("#client-chips");
-  if (state.clients.length <= 1) {
-    cc.replaceChildren();
-  } else {
-    const chips = [
+  const chips = STAGE_FILTERS.map((f) => {
+    const n = f.stages ? state.requests.filter((r) => f.stages.includes(r.stage) && inClient(r)).length : 0;
+    return el("button", {
+      type: "button",
+      class: "chip sm" + (state.filterStage === f.key ? " active" : ""),
+      onclick: () => { state.filterStage = f.key; saveUiState(); renderRequests(); },
+    }, f.stages && n ? `${f.label} (${n})` : f.label);
+  });
+
+  if (state.clients.length > 1) {
+    chips.push(el("span", { class: "chip-sep", "aria-hidden": "true" }));
+    chips.push(
       el("button", {
         type: "button",
         class: "chip sm" + (state.filterClient === "all" ? " active" : ""),
-        onclick: () => { state.filterClient = "all"; renderRequests(); },
+        onclick: () => { state.filterClient = "all"; saveUiState(); renderRequests(); },
       }, "Everyone"),
       ...state.clients.map((c) =>
         el("button", {
           type: "button",
           class: "chip sm" + (state.filterClient === c.clientId ? " active" : ""),
-          onclick: () => { state.filterClient = c.clientId; renderRequests(); },
+          onclick: () => { state.filterClient = c.clientId; saveUiState(); renderRequests(); },
         }, c.name)
-      ),
-    ];
-    cc.replaceChildren(...chips);
+      )
+    );
   }
+
+  rail.replaceChildren(...chips);
+  rail.scrollLeft = keepScroll; // don't jump the rail on re-render
 }
 
 function filteredRequests() {
@@ -385,7 +498,16 @@ function filteredRequests() {
     .filter((r) => (f.stages ? f.stages.includes(r.stage) : true))
     .filter((r) => (state.filterClient === "all" ? true : r.clientId === state.filterClient))
     .slice()
-    .sort((a, b) => Date.parse(b.createdAt || 0) - Date.parse(a.createdAt || 0));
+    .sort((a, b) => {
+      // Needs-you first, then Claude's in-flight work, done last. Within the
+      // needs-you tier oldest first so nothing rots; elsewhere newest first.
+      const ta = stageTier(a.stage);
+      const tb = stageTier(b.stage);
+      if (ta !== tb) return ta - tb;
+      const ca = Date.parse(a.createdAt || 0) || 0;
+      const cb = Date.parse(b.createdAt || 0) || 0;
+      return ta === 0 ? ca - cb : cb - ca;
+    });
 }
 
 function renderRequests() {
@@ -427,14 +549,36 @@ function requestCard(r) {
   const sm = stageMeta(r.stage);
   const cl = state.clientById[r.clientId] || {};
   const isDone = r.stage === "done";
+  const expanded = isCardExpanded(r);
 
   const card = el("div", {
-    class: "card" + (isDone ? " is-done" : ""),
+    class: "card req-card" + (isDone ? " is-done" : "") + (expanded ? " is-open" : ""),
     "data-req-id": r.id,
     "data-updated-at": r.updatedAt || "",
   });
 
-  // header
+  // Humanized time-in-stage ("in Drafting for 2 days"), from updatedAt. Ages
+  // matter most where sitting still is a problem: needs-you stages and drafting
+  // get an attention tint after 24h so quiet rot is visible at a glance.
+  const stageAge = isDone ? "" : sinceShort(r.updatedAt);
+  const stageT = Date.parse(r.updatedAt || "");
+  const isStale = !isDone &&
+    (NEEDS_YOU_STAGES.has(r.stage) || r.stage === "drafting") &&
+    !Number.isNaN(stageT) && (Date.now() - stageT) > STALE_AFTER_MS;
+
+  // Expand/collapse control: a real 44pt button for a11y; the whole head is the
+  // tap target on top of it.
+  const bodyId = `req-body-${r.id}`;
+  const expandBtn = el("button", {
+    type: "button",
+    class: "req-expand",
+    "aria-expanded": expanded ? "true" : "false",
+    "aria-controls": bodyId,
+    "aria-label": expanded ? "Hide details" : "Show details",
+    html: CHEVRON_SVG,
+  });
+
+  // header — tapping it toggles the heavy body (except the delete control)
   const head = el("div", { class: "req-head" },
     brandAvatar(cl, r.clientId),
     el("div", { class: "req-headtext" },
@@ -442,21 +586,45 @@ function requestCard(r) {
       el("div", { class: "req-badges" },
         el("span", { class: "badge bone" }, typeLabel(r.type)),
         el("span", { class: `badge ${sm.cls}` }, sm.label),
-        el("span", { class: "req-when" }, relTime(r.createdAt))
+        el("span", { class: "req-when" }, relTime(r.createdAt)),
+        stageAge ? el("span", { class: "req-stagetime" + (isStale ? " stale" : "") }, `in ${sm.label} for ${stageAge}`) : false
       )
     ),
-    deleteRequestButton(r)
+    deleteRequestButton(r),
+    expandBtn
   );
+  head.addEventListener("click", (e) => {
+    if (e.target.closest(".req-del")) return;
+    const open = !card.classList.contains("is-open");
+    // Animate only user-initiated opens. Bodies rendered already-open must never
+    // depend on an animation to become visible (background tabs freeze CSS
+    // animations at frame 0, leaving content stuck at opacity 0).
+    card.classList.toggle("do-anim", open);
+    card.classList.toggle("is-open", open);
+    expandBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    expandBtn.setAttribute("aria-label", open ? "Hide details" : "Show details");
+    cardExpandChoice.set(r.id, { stage: r.stage, expanded: open });
+  });
   card.append(head);
 
   if (!isDone) {
     if (r.title) card.append(el("div", { class: "req-title" }, r.title));
     if (r.description) card.append(el("div", { class: "req-desc" }, r.description));
+    // One-line staged-draft peek so a collapsed ready card still shows what
+    // Claude made. Hidden (via CSS) once the card is open.
+    const d = r.draft || {};
+    const peek = d.caption || d.preview || d.summary || "";
+    if (peek) card.append(el("div", { class: "req-peek" }, `Draft: ${peek}`));
+  }
 
+  // Everything heavy lives in the collapsible body.
+  const body = el("div", { class: "req-body", id: bodyId });
+
+  if (!isDone) {
     // attachments
     const atts = Array.isArray(r.attachments) ? r.attachments.filter((a) => a && a.url) : [];
     if (atts.length) {
-      card.append(
+      body.append(
         el("div", { class: "req-thumbs" },
           ...atts.map((a) => {
             if ((a.mime || "").startsWith("audio/")) {
@@ -473,8 +641,9 @@ function requestCard(r) {
     }
   }
 
-  card.append(actionArea(r));
-  card.append(threadSection(r));
+  body.append(actionArea(r));
+  body.append(threadSection(r));
+  card.append(body);
   return card;
 }
 
@@ -659,21 +828,58 @@ function buildingStatus(r) {
 
 function shippingStatus(r) {
   const txt = r.stage === "approved" ? "Approved, publishing…" : "Publishing…";
-  return el("div", { class: "act" },
-    el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode(txt))
-  );
+  const wrap = el("div", { class: "act stack" });
+  wrap.append(el("div", { class: "statusline go" }, el("span", { class: "dot" }), document.createTextNode(txt)));
+
+  // Cancel window: while the worker hasn't picked the request up yet, an approve
+  // can still be pulled back. Same direct-stage patch Retry/Reset already use;
+  // if the worker grabbed it first the server rejects and the next poll reconciles.
+  if (r.stage === "approved") {
+    const back = el("button", { type: "button", class: "btn ghost sm" }, "Back to review");
+    back.addEventListener("click", async () => {
+      const res = await call(() => api.update(r.id, { stage: "ready" }));
+      if (res) { applyRequest(res.request); toast("Pulled back for review. Nothing was published."); render(); }
+    });
+    wrap.append(el("div", { class: "btn-row" }, back));
+    wrap.append(el("div", { class: "dev-note" }, "Not shipped yet. Back to review pulls it out of the publish queue."));
+  }
+  return wrap;
 }
 
 function errorActions(r) {
   const wrap = el("div", { class: "act stack" });
   const msg = (r.meta && r.meta.run && r.meta.run.error) || "Something went wrong while building this.";
-  wrap.append(el("div", { class: "notebox" }, el("strong", {}, "Error: "), document.createTextNode(msg)));
+  wrap.append(el("div", { class: "notebox err" }, el("strong", {}, "Error: "), document.createTextNode(msg)));
   const retry = el("button", { type: "button", class: "btn ghost sm" }, "Retry");
   retry.addEventListener("click", async () => {
-    // Re-queue — NOT action:"start", which maps error->drafting, a stage the worker
-    // ignores (it only picks up "queued"), so the request would strand. Clearing
-    // run.error stops the Desk showing the stale failure once it's back in the queue.
-    const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: "" } };
+    const run = (r.meta && r.meta.run) || {};
+    // Publish-phase failure with a draft: the creative is already reviewed and
+    // approved, so FIRST try the V7 first-class requeue action — the backend keeps
+    // the draft and puts the request straight back in the SHIP lane ("approved").
+    // The live V6 backend doesn't know the action and rejects it (illegal
+    // transition); fall through SILENTLY to the legacy patch below, so the Desk
+    // works today and auto-upgrades the moment V7 deploys.
+    if (run.phase === "publish" && r.draft) {
+      setBusy(true);
+      try {
+        const rq = await api.update(r.id, { action: "requeue" });
+        if (rq && rq.ok !== false && !(rq.status >= 400) && rq.request) {
+          applyRequest(rq.request);
+          toast("Re-queued to publish — the approved draft was kept.");
+          render();
+          return;
+        }
+      } catch {
+        // network blip — the legacy path below surfaces real errors
+      } finally {
+        setBusy(false);
+      }
+    }
+    // Legacy path (V6 live today): direct re-queue for a fresh draft — NOT
+    // action:"start", which maps error->drafting, a stage the worker ignores (it
+    // only picks up "queued"), so the request would strand. Clearing run.error
+    // stops the Desk showing the stale failure once it's back in the queue.
+    const meta = { ...(r.meta || {}), run: { ...run, error: "" } };
     const res = await call(() => api.update(r.id, { stage: "queued", draft: null, meta }));
     if (res) { applyRequest(res.request); toast("Back in the queue."); render(); }
   });
@@ -713,7 +919,7 @@ function doneActions(r) {
     document.createTextNode(`Published to ${where}${when ? ` · ${when}` : ""}`)));
   if (run.status === "shipped-partial" && Array.isArray(run.failures) && run.failures.length) {
     wrap.append(el("div", { class: "notebox" }, el("strong", {}, "Heads up: "),
-      document.createTextNode("Didn't post to " + run.failures.map((f) => f.channel).join(", ") + " — handle those manually.")));
+      document.createTextNode("Didn't post to " + run.failures.map((f) => f.channel).join(", ") + "; handle those manually.")));
   }
   wrap.append(el("a", { href: "https://postiz.notyournormalmarketing.com/launches", target: "_blank", rel: "noopener", class: "kv link" }, "View in Postiz →"));
   return wrap;
@@ -774,44 +980,94 @@ function readyActions(r) {
       if (!window.confirm(`Approve and publish to ${clientName}'s ${where}? This goes live automatically.`)) return;
     }
     const res = await call(() => api.update(r.id, { action: "approve" }));
-    if (res) { applyRequest(res.request); toast(isSocial ? "Approved — publishing." : "Approved."); render(); }
+    if (res) { applyRequest(res.request); toast(isSocial ? "Approved. Publishing…" : "Approved."); render(); }
   });
 
-  const changes = el("button", { type: "button", class: "btn ghost" }, "Request changes");
-  changes.addEventListener("click", async () => {
-    const note = window.prompt("What should change?");
-    if (note == null) return;
-    const trimmed = note.trim();
-    if (!trimmed) { toast("Add a short note so Claude knows what to change."); return; }
+  // Inline change-note editor (replaces window.prompt): the draft stays visible
+  // while typing, and unsent text survives re-renders via state.changeNotes.
+  const noteOpen = r.id in state.changeNotes;
+  const noteBox = el("div", { class: "changenote" + (noteOpen ? "" : " hidden") });
+  const noteTa = el("textarea", { id: `chg-${r.id}`, placeholder: "Be specific: copy, image, schedule, channel." });
+  noteTa.value = noteOpen ? state.changeNotes[r.id] : "";
+  noteTa.addEventListener("focus", () => { typingActive = true; });
+  noteTa.addEventListener("input", () => { state.changeNotes[r.id] = noteTa.value; });
+  noteTa.addEventListener("blur", () => { typingActive = false; });
+  const sendBack = el("button", { type: "button", class: "btn" }, "Send back to Claude");
+  sendBack.addEventListener("click", async () => {
+    const trimmed = noteTa.value.trim();
+    if (!trimmed) { toast("Add a short note so Claude knows what to change."); noteTa.focus(); return; }
     const res = await call(() => api.update(r.id, { action: "requestChanges", changeNote: trimmed }));
-    if (res) { applyRequest(res.request); toast("Sent back for changes."); render(); }
+    if (res) { delete state.changeNotes[r.id]; applyRequest(res.request); toast("Sent back for changes."); render(); }
+  });
+  noteBox.append(
+    el("label", { for: `chg-${r.id}` }, "What should change?"),
+    noteTa,
+    el("div", { class: "btn-row" }, sendBack)
+  );
+
+  const changes = el("button", { type: "button", class: "btn ghost" }, "Request changes");
+  changes.addEventListener("click", () => {
+    const opening = noteBox.classList.contains("hidden");
+    if (opening) {
+      if (!(r.id in state.changeNotes)) state.changeNotes[r.id] = "";
+      noteBox.classList.remove("hidden");
+      noteTa.focus();
+    } else {
+      noteBox.classList.add("hidden");
+      if (!noteTa.value.trim()) delete state.changeNotes[r.id];
+    }
   });
 
   wrap.append(el("div", { class: "btn-row" }, approve, changes));
+  wrap.append(noteBox);
   return wrap;
 }
 
 // ===================================================================
 // EVENTS view
 // ===================================================================
+// Local "today" as YYYY-MM-DD (no UTC surprises) — same date semantics as the
+// portal's past-event filter, so both apps flip an event to "past" at local midnight.
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Soonest first; undated events sink to the end instead of floating to the top.
+function cmpEventDateAsc(a, b) {
+  const da = String((a && a.date) || "");
+  const db = String((b && b.date) || "");
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+  return da.localeCompare(db);
+}
+
 function renderEvents() {
   const list = $("#events-list");
-  const rows = state.events.slice().sort((a, b) => Date.parse(a.date || 0) - Date.parse(b.date || 0));
+  // Upcoming (incl. today + undated) soonest-first on top; past events sink to the
+  // bottom, dimmed, most recently passed first. Local-date string compare matches
+  // the portal — no UTC parse pushing a late-night event into "past" early.
+  const today = todayISO();
+  const isPast = (e) => { const d = String((e && e.date) || "").slice(0, 10); return !!d && d < today; };
+  const upcoming = state.events.filter((e) => !isPast(e)).sort(cmpEventDateAsc);
+  const past = state.events.filter(isPast).sort((a, b) => cmpEventDateAsc(b, a));
+  const rows = [...upcoming, ...past];
 
   if (!rows.length) {
     list.replaceChildren(el("div", { class: "card empty" }, "No events yet. Clients add these from their portal."));
     return;
   }
 
-  list.replaceChildren(...rows.map((e) => eventCard(e)));
+  list.replaceChildren(...rows.map((e) => eventCard(e, isPast(e))));
 }
 
-function eventCard(e) {
+function eventCard(e, past = false) {
   const d = fmtEventDate(e.date);
   const startT = fmtTime(e.time);
   const endT = fmtTime(e.endTime);
   const timeText = startT ? (endT ? `${startT} – ${endT}` : startT) : "";
-  const card = el("div", { class: "card" });
+  const card = el("div", { class: past ? "card is-past" : "card" });
 
   card.append(el("div", { class: "req-head" },
     brandAvatar(state.clientById[e.clientId], e.clientId),

@@ -143,6 +143,126 @@ test("addEvent stores an optional start time; bad time rejected", async () => {
   assert.equal(bad.status, 400);
 });
 
+/* ---------- V7 contract: endTime round-trip ---------- */
+
+test("addEvent stores an optional end time and round-trips it; bad endTime rejected", async () => {
+  const ev = await post({ c: "tok-o", action: "addEvent", event: { title: "Wine tasting", date: "2026-07-18", time: "19:00", endTime: "22:00" } });
+  assert.equal(ev.status, 200);
+  const cv = await get("?c=tok-o");
+  const row = cv.body.events.find((e) => e.eventId === ev.body.eventId);
+  assert.equal(row.time, "19:00");
+  assert.equal(row.endTime, "22:00");
+  const av = await get("?admin=testadmin");
+  const arow = av.body.events.find((e) => e.eventId === ev.body.eventId);
+  assert.equal(arow.endTime, "22:00");
+  const bad = await post({ c: "tok-o", action: "addEvent", event: { title: "x", date: "2026-07-18", endTime: "26:00" } });
+  assert.equal(bad.status, 400);
+});
+
+test("promoteEvent carries start and end times into the promo description", async () => {
+  const ev = await post({
+    c: "tok-o", action: "addEvent",
+    event: { title: "Karaoke", date: "2026-07-11", time: "19:00", endTime: "22:00", description: "prizes for best duet" },
+  });
+  const promo = await post({ admin: "testadmin", action: "promoteEvent", eventId: ev.body.eventId });
+  assert.equal(promo.status, 200);
+  const av = await get("?admin=testadmin");
+  const req = av.body.requests.find((r) => r.id === promo.body.requestId);
+  assert.match(req.description, /Karaoke on 2026-07-11/);
+  assert.match(req.description, /7:00 PM–10:00 PM/);
+  assert.match(req.description, /prizes for best duet/);
+});
+
+test("promoteEvent with only a start time says 'starting ...'", async () => {
+  const ev = await post({ c: "tok-o", action: "addEvent", event: { title: "Open mic", date: "2026-07-12", time: "18:30" } });
+  const promo = await post({ admin: "testadmin", action: "promoteEvent", eventId: ev.body.eventId });
+  const av = await get("?admin=testadmin");
+  const req = av.body.requests.find((r) => r.id === promo.body.requestId);
+  assert.match(req.description, /starting 6:30 PM/);
+});
+
+/* ---------- V7 contract: server-side meta deep-merge ---------- */
+
+test("a meta patch merges instead of clobbering (thread + activity + idempotency key survive)", async () => {
+  const created = await post({
+    c: "tok-o", action: "submitRequest", clientRequestId: "cli_merge_1",
+    request: { type: "post", description: "meta merge test" },
+  });
+  const id = created.body.id;
+  // a client message lands after the worker's fetch...
+  await post({ c: "tok-o", action: "postMessage", id, text: "Actually make it blue" });
+  // ...then a worker writeback patches only meta.run
+  const wb = await post({ admin: "testadmin", action: "updateRequest", id, patch: { meta: { run: { phase: "draft", error: "render failed" } } } });
+  assert.equal(wb.status, 200);
+  const m = wb.body.request.meta;
+  assert.equal(m.run.error, "render failed");
+  assert.equal(m.thread.length, 1); // client message survived
+  assert.equal(m.thread[0].text, "Actually make it blue");
+  assert.equal(m.clientRequestId, "cli_merge_1"); // idempotency key survived
+  assert.ok(m.activity.some((a) => a.kind === "created")); // audit trail survived
+});
+
+test("an action patch carrying stale meta keeps the server's activity entry, no duplicates", async () => {
+  const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "activity keep test" } });
+  const id = created.body.id;
+  // worker sends action + a stale full-meta copy (as old writebacks did)
+  const av = await get("?admin=testadmin");
+  const stale = av.body.requests.find((r) => r.id === id).meta;
+  const send = await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "send", meta: { ...stale, notified: true } } });
+  assert.equal(send.status, 200);
+  const m = send.body.request.meta;
+  assert.equal(m.notified, true); // the delta landed
+  const kinds = m.activity.map((a) => a.kind);
+  assert.ok(kinds.includes("created"));
+  assert.ok(kinds.includes("send")); // the entry the server just appended was NOT dropped
+  assert.equal(m.activity.filter((a) => a.kind === "created").length, 1); // union, not duplicate
+});
+
+/* ---------- V7 contract: first-class requeue action ---------- */
+
+test("requeue after a publish failure returns to approved KEEPING the draft", async () => {
+  const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "publish retry test" } });
+  const id = created.body.id;
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "send" } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "start" } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "ready", draft: { caption: "approved creative" } } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "approve" } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "ship" } });
+  const err = await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "error", meta: { run: { phase: "publish", error: "Postiz 502" } } } });
+  assert.equal(err.body.request.stage, "error");
+  const rq = await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "requeue" } });
+  assert.equal(rq.status, 200);
+  assert.equal(rq.body.request.stage, "approved");
+  assert.deepEqual(rq.body.request.draft, { caption: "approved creative" }); // draft KEPT
+  assert.equal(rq.body.request.meta.run.error, ""); // stale error cleared
+  assert.ok(rq.body.request.meta.activity.some((a) => a.kind === "requeue")); // audit-logged
+});
+
+test("requeue of a draft-phase failure re-queues for a fresh draft; rescues stuck shipping; 409 elsewhere", async () => {
+  // draft-phase failure -> queued, draft cleared
+  const a = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "draft retry test" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: a.body.id, patch: { action: "send" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: a.body.id, patch: { action: "start" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: a.body.id, patch: { action: "error", meta: { run: { phase: "draft", error: "render crashed" } } } });
+  const rqA = await post({ admin: "testadmin", action: "updateRequest", id: a.body.id, patch: { action: "requeue" } });
+  assert.equal(rqA.body.request.stage, "queued");
+  assert.equal(rqA.body.request.draft, null);
+
+  // stuck shipping row (publish phase, draft present) -> approved, draft kept
+  const b = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "stuck shipping test" } });
+  const bad = await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "requeue" } });
+  assert.equal(bad.status, 409); // illegal from submitted
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "send" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "start" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "ready", draft: { caption: "c" } } });
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "approve" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "ship" } });
+  await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { meta: { run: { phase: "publish" } } } });
+  const rqB = await post({ admin: "testadmin", action: "updateRequest", id: b.body.id, patch: { action: "requeue" } });
+  assert.equal(rqB.body.request.stage, "approved");
+  assert.deepEqual(rqB.body.request.draft, { caption: "c" });
+});
+
 test("postMessage threads client + team replies; empty + missing rejected", async () => {
   const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "thread test" } });
   const id = created.body.id;

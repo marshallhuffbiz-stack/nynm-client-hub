@@ -73,6 +73,7 @@ const $ = (id) => document.getElementById(id);
 const views = {
   loading: $("view-loading"),
   badlink: $("view-badlink"),
+  offline: $("view-offline"),
   pin: $("view-pin"),
   app: $("view-app"),
 };
@@ -135,9 +136,9 @@ const DESC_HINTS = {
 };
 
 // stage -> { label, badge color class }
-// Client-facing status scheme: New (gray) -> In progress (blue) -> Ready (green) -> Posted (gray).
+// Client-facing status scheme: Received (gray) -> In progress (blue) -> Ready (green) -> Posted (gray).
 const STAGE_LABELS = {
-  submitted: "New",
+  submitted: "Received",
   queued: "In progress",
   drafting: "In progress",
   changes: "In progress",
@@ -145,6 +146,9 @@ const STAGE_LABELS = {
   approved: "Ready",
   shipping: "Ready",
   done: "Posted",
+  // A failed run is NYNM's problem to fix, not the client's — never show a
+  // scary/stale state; the Desk surfaces it red on Marshall's side.
+  error: "In progress",
 };
 const STAGE_BADGE = {
   submitted: "bone",   // New -> gray
@@ -155,7 +159,11 @@ const STAGE_BADGE = {
   approved: "go",
   shipping: "go",
   done: "bone",        // Posted -> gray
+  error: "send",
 };
+
+// "Posted" only makes sense for social work; website/design/other finish as "Done".
+const DONE_LABEL_BY_TYPE = { post: "Posted", "event-promo": "Posted", event: "Posted" };
 
 const TYPE_LABELS = {
   post: "Post",
@@ -176,6 +184,13 @@ let pendingAttachments = [];
 // Files chosen but not yet uploaded (in case a selection is mid-upload on submit).
 let uploadingCount = 0;
 let busy = false;
+// Last payload applied to the page (source of truth for optimistic updates).
+let currentData = null;
+// Signature of the last rendered payload, so identical revalidations skip the
+// re-render entirely (protects half-typed thread drafts from being wiped).
+let lastRenderSig = "";
+// When we last heard fresh data from the server (drives revalidate-on-return).
+let lastLoadedAt = 0;
 
 /* ---------- view helpers ---------- */
 
@@ -186,9 +201,25 @@ function showView(name) {
   }
 }
 
+// Keep the toast above the iOS software keyboard: the keyboard shrinks the
+// visual viewport but not the layout viewport, so a bottom-fixed toast would
+// render underneath it. Lift the toast by the covered height when needed.
+function positionToast() {
+  if (!toastEl) return;
+  const vv = window.visualViewport;
+  if (!vv) return;
+  const covered = window.innerHeight - (vv.height + vv.offsetTop);
+  toastEl.style.bottom = covered > 40 ? `${covered + 16}px` : "";
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener("resize", positionToast);
+  window.visualViewport.addEventListener("scroll", positionToast);
+}
+
 let toastTimer = null;
 function toast(message) {
   if (!toastEl) return;
+  positionToast();
   toastEl.textContent = message;
   toastEl.classList.add("show");
   clearTimeout(toastTimer);
@@ -206,8 +237,9 @@ function esc(value) {
 
 /* ---------- formatting ---------- */
 
-function stageBadge(stage) {
-  const label = STAGE_LABELS[stage] || "Submitted";
+function stageBadge(stage, type) {
+  let label = STAGE_LABELS[stage] || "Received";
+  if (stage === "done") label = DONE_LABEL_BY_TYPE[type] || "Done";
   const color = STAGE_BADGE[stage] || "bone";
   return `<span class="badge ${color} stage">${esc(label)}</span>`;
 }
@@ -237,6 +269,12 @@ function formatTime(t) {
   const [h, m] = String(t).split(":").map(Number);
   if (h > 23 || m > 59) return "";
   return new Date(2000, 0, 1, h, m).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+}
+
+// Swap any raw 24-hour times inside prose (e.g. "at 19:30") for the 12-hour form
+// a client would actually write ("at 7:30 PM"). Used on idea prefills.
+function humanizeTimes(text) {
+  return String(text || "").replace(/\b(\d{1,2}):(\d{2})\b/g, (match, h, m) => formatTime(`${h}:${m}`) || match);
 }
 
 // Relative timestamp for thread messages.
@@ -276,11 +314,52 @@ function sortByCreatedDesc(a, b) {
   return String(b && b.createdAt || "").localeCompare(String(a && a.createdAt || ""));
 }
 
+// Soonest first; undated events sink to the end instead of floating to the top.
 function sortByDateAsc(a, b) {
-  return String(a && a.date || "").localeCompare(String(b && b.date || ""));
+  const da = String(a && a.date || "");
+  const db = String(b && b.date || "");
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+  return da.localeCompare(db);
+}
+
+// Local "today" as YYYY-MM-DD (no UTC surprises), for the past-event filter.
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /* ---------- rendering: lists ---------- */
+
+// Snapshot half-typed thread drafts (and which one has the keyboard) so a
+// background re-render never eats what the client is typing.
+function snapshotThreadDrafts() {
+  const drafts = {};
+  requestsList.querySelectorAll(".thread-input").forEach((ta) => {
+    const id = ta.getAttribute("data-msg-id");
+    if (id && ta.value) drafts[id] = ta.value;
+  });
+  const active = document.activeElement;
+  const focused = (active && active.classList && active.classList.contains("thread-input"))
+    ? { id: active.getAttribute("data-msg-id"), start: active.selectionStart, end: active.selectionEnd }
+    : null;
+  return { drafts, focused };
+}
+
+function restoreThreadDrafts({ drafts, focused }) {
+  for (const [id, value] of Object.entries(drafts)) {
+    const ta = requestsList.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
+    if (ta) ta.value = value;
+  }
+  if (focused && focused.id) {
+    const ta = requestsList.querySelector(`[data-msg-id="${CSS.escape(focused.id)}"]`);
+    if (ta) {
+      ta.focus();
+      try { ta.setSelectionRange(focused.start, focused.end); } catch { /* non-fatal */ }
+    }
+  }
+}
 
 function renderRequests(requests) {
   const list = Array.isArray(requests) ? requests.slice() : [];
@@ -291,6 +370,8 @@ function renderRequests(requests) {
       `<div class="card"><div class="empty">No requests yet. Send your first one above.</div></div>`;
     return;
   }
+
+  const typing = snapshotThreadDrafts();
 
   requestsList.innerHTML = list.map((req) => {
     const title = (req && req.title) ? esc(req.title) : esc(typeLabel(req && req.type));
@@ -312,15 +393,22 @@ function renderRequests(requests) {
               ${photoMeta}
             </div>
           </div>
-          ${stageBadge(req && req.stage)}
+          ${stageBadge(req && req.stage, req && req.type)}
         </div>
         ${threadHtml(req)}
       </div>`;
   }).join("");
+
+  restoreThreadDrafts(typing);
 }
 
 function renderEvents(events) {
-  const list = Array.isArray(events) ? events.slice() : [];
+  const today = todayISO();
+  // Past events drop out of "Upcoming events" (undated ones stay, sorted last).
+  const list = (Array.isArray(events) ? events.slice() : []).filter((evt) => {
+    const date = String(evt && evt.date || "").slice(0, 10);
+    return !date || date >= today;
+  });
   list.sort(sortByDateAsc);
 
   if (list.length === 0) {
@@ -378,16 +466,17 @@ function renderThumbs() {
     return;
   }
   thumbsEl.classList.remove("hidden");
-  thumbsEl.innerHTML = pendingAttachments.map((a) => {
+  thumbsEl.innerHTML = pendingAttachments.map((a, i) => {
+    const removeBtn = `<button type="button" class="thumb-remove" data-remove="${i}" aria-label="Remove ${esc(a.name || "photo")}">&times;</button>`;
     const mime = a.mime || "";
     if (mime.startsWith("audio/")) {
-      return `<div class="thumb thumb-audio" title="${esc(a.name || "voice note")}"><span class="small">voice</span></div>`;
+      return `<div class="thumb thumb-audio" title="${esc(a.name || "voice note")}"><span class="small">voice</span>${removeBtn}</div>`;
     }
     const isImage = mime.startsWith("image/") && a.url;
     const inner = isImage
       ? `<img class="zoomable" src="${esc(a.url)}" alt="${esc(a.name || "attachment")}" />`
       : `<span class="small">file</span>`;
-    return `<div class="thumb" title="${esc(a.name || "")}">${inner}</div>`;
+    return `<div class="thumb" title="${esc(a.name || "")}">${inner}${removeBtn}</div>`;
   }).join("");
 }
 
@@ -522,9 +611,20 @@ async function submitRequest(event) {
     }, pendingSubmitId);
     if (res && res.ok) {
       pendingSubmitId = null;
+      // Paint the new request card immediately; the background refresh reconciles.
+      addLocalRequest({
+        id: res.id || `local_${Date.now()}`,
+        type: selectedType,
+        title: "",
+        description,
+        attachments: pendingAttachments.slice(),
+        stage: "submitted",
+        createdAt: new Date().toISOString(),
+        meta: {},
+      });
       resetRequestForm();
       toast("Request sent. We'll take it from here.");
-      await refresh();
+      refresh(); // deliberately not awaited — the button unlocks right away
     } else {
       toast("That didn't send. Please try again.");
     }
@@ -564,9 +664,18 @@ async function submitEvent(event) {
       description: evtDesc.value.trim(),
     });
     if (res && res.ok) {
+      // Paint the new event immediately; the background refresh reconciles.
+      addLocalEvent({
+        eventId: res.eventId || `local_${Date.now()}`,
+        title,
+        date,
+        time: evtTime.value.trim(),
+        endTime: evtEndTime.value.trim(),
+        description: evtDesc.value.trim(),
+      });
       resetEventForm();
       toast("Event added to your calendar.");
-      await refresh();
+      refresh(); // deliberately not awaited — the button unlocks right away
     } else {
       toast("That didn't save. Please try again.");
     }
@@ -587,7 +696,23 @@ function setBusy(value, button, label) {
 
 /* ---------- load / refresh ---------- */
 
+// Signature of the render-relevant slice of a payload. Lets applyData skip the
+// wholesale innerHTML rebuild when a background revalidation returns the exact
+// same data (so half-typed drafts and scroll position are never disturbed).
+function dataSig(data) {
+  try {
+    return JSON.stringify([data && data.client, data && data.requests, data && data.events]);
+  } catch {
+    return `sig_${Date.now()}`;
+  }
+}
+
 function applyData(data) {
+  currentData = data;
+  const sig = dataSig(data);
+  if (sig === lastRenderSig) return;
+  lastRenderSig = sig;
+
   const client = (data && data.client) || {};
   const name = client.name || "Your business";
   clientNameEl.textContent = name;
@@ -609,14 +734,55 @@ function applyData(data) {
   renderIdeas(data);
 }
 
-// Re-fetch the client's data and re-render the lists (used after submits).
+// Re-fetch the client's data and re-render the lists (used after submits and
+// on revalidate). Writes the fresh payload through to the on-device cache so a
+// closed-and-reopened app paints the latest data, not a pre-submit snapshot.
 async function refresh() {
   try {
     const res = await api.load();
-    if (res && res.ok) applyData(res);
+    if (res && res.ok) {
+      if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
+      lastLoadedAt = Date.now();
+      applyData(res);
+    }
   } catch (err) {
     /* keep the current view; a transient refresh failure shouldn't blank the screen */
   }
+}
+
+/* ---------- optimistic local updates (instant UI, server reconciles after) ---------- */
+
+// Merge a locally-known change into the current payload, re-render, and write it
+// through to the cache so a reopened app includes it immediately.
+function applyLocalData(next) {
+  if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, next);
+  applyData(next);
+}
+
+// A just-submitted request, painted before the background refresh confirms it.
+function addLocalRequest(req) {
+  const data = currentData || { ok: true, client: {}, requests: [], events: [] };
+  const requests = Array.isArray(data.requests) ? data.requests.slice() : [];
+  if (!requests.some((r) => r && r.id === req.id)) requests.unshift(req);
+  applyLocalData({ ...data, requests });
+}
+
+// A just-added event.
+function addLocalEvent(evt) {
+  const data = currentData || { ok: true, client: {}, requests: [], events: [] };
+  const events = Array.isArray(data.events) ? data.events.slice() : [];
+  if (!events.some((e) => e && e.eventId === evt.eventId)) events.push(evt);
+  applyLocalData({ ...data, events });
+}
+
+// The server's updated copy of one request (e.g. after posting a thread message).
+function updateLocalRequest(req) {
+  if (!req || !req.id) return;
+  const data = currentData || { ok: true, client: {}, requests: [], events: [] };
+  const requests = (Array.isArray(data.requests) ? data.requests.slice() : []);
+  const idx = requests.findIndex((r) => r && r.id === req.id);
+  if (idx >= 0) requests[idx] = req; else requests.unshift(req);
+  applyLocalData({ ...data, requests });
 }
 
 async function start() {
@@ -636,8 +802,8 @@ async function start() {
   try {
     res = await api.load();
   } catch (err) {
-    // Network blip: keep showing cached data rather than dead-ending.
-    if (!painted) showView("badlink");
+    // Network blip, not a bad link: keep showing cached data, or offer a retry.
+    if (!painted) showView("offline");
     return;
   }
 
@@ -648,17 +814,25 @@ async function start() {
     return;
   }
 
-  // Bad / unknown link. If we have cached data, this is far more likely a transient
-  // backend hiccup than a revoked token — keep the client on their data instead of
-  // flashing a scary "invalid link" screen.
-  if (!res || res.status === 403 || !res.ok) {
+  // A definitive 403 means the token itself was rejected — that (and only that)
+  // earns the invalid-link screen. If we have cached data, keep the client on
+  // their data instead of flashing a scary "invalid link" screen.
+  if (res && res.status === 403) {
     if (!painted) showView("badlink");
+    return;
+  }
+
+  // Anything else that isn't a clean payload (5xx, malformed body) is a server
+  // problem, not the client's link — show the friendly retry state.
+  if (!res || !res.ok) {
+    if (!painted) showView("offline");
     return;
   }
 
   // Good — persist token, cache the fresh payload, and reconcile the view.
   rememberAccess();
   if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
+  lastLoadedAt = Date.now();
   applyData(res);
   showView("app");
 }
@@ -695,14 +869,23 @@ async function onPinSubmit(event) {
   if (res && res.ok) {
     rememberAccess();
     if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, res);
+    lastLoadedAt = Date.now();
     errorEl.classList.add("hidden");
     applyData(res);
     showView("app");
     return;
   }
 
+  // Network dropped mid-check: the link and PIN are fine — say so and let them retry.
+  if (!res) {
+    errorEl.textContent = "Can't reach the server. Check your connection and try again.";
+    errorEl.classList.remove("hidden");
+    return;
+  }
+
   // Still needs PIN (wrong one) or unauthorized -> show inline error, stay on PIN.
-  if (res && (res.needPin || res.status === 401)) {
+  if (res.needPin || res.status === 401) {
+    errorEl.textContent = "That PIN didn't work. Try again.";
     errorEl.classList.remove("hidden");
     input.value = "";
     input.focus();
@@ -711,8 +894,15 @@ async function onPinSubmit(event) {
     return;
   }
 
-  // Anything else (bad link) -> friendly dead end.
-  showView("badlink");
+  // A definitive token rejection -> the link really is bad.
+  if (res.status === 403) {
+    showView("badlink");
+    return;
+  }
+
+  // Anything else (server hiccup) -> keep them here with a retry-friendly note.
+  errorEl.textContent = "Something went wrong on our end. Give it another try.";
+  errorEl.classList.remove("hidden");
 }
 
 /* ---------- wire up ---------- */
@@ -735,8 +925,36 @@ reqFiles.addEventListener("change", () => onFilesPicked(reqFiles));
 reqCamera.addEventListener("change", () => onFilesPicked(reqCamera));
 $("view-pin").addEventListener("submit", onPinSubmit);
 
-// Tap an attachment preview to view it full size.
+// "Can't reach the server" retry: run the whole start sequence again.
+$("retry-btn")?.addEventListener("click", () => {
+  showView("loading");
+  start();
+});
+
+// Revalidate when the (installed) app comes back to the foreground, so status
+// changes and replies show up without a cold relaunch. Throttled to once a minute.
+function revalidateOnReturn() {
+  if (document.visibilityState !== "visible") return;
+  if (!token || busy) return;
+  if (!views.app || views.app.classList.contains("hidden")) return;
+  if (Date.now() - lastLoadedAt < 60000) return;
+  refresh();
+}
+document.addEventListener("visibilitychange", revalidateOnReturn);
+window.addEventListener("focus", revalidateOnReturn);
+
+// Tap the little x to un-attach a photo before sending; tap the preview to zoom.
 thumbsEl.addEventListener("click", (e) => {
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    const i = Number(remove.getAttribute("data-remove"));
+    if (Number.isInteger(i) && i >= 0 && i < pendingAttachments.length) {
+      pendingAttachments.splice(i, 1);
+      renderThumbs();
+      updateUploadStatus();
+    }
+    return;
+  }
   const img = e.target.closest(".thumb img");
   if (img && img.src) openLightbox(img.src, img.alt || "attachment");
 });
@@ -750,12 +968,25 @@ requestsList.addEventListener("click", async (e) => {
   const text = ta ? ta.value.trim() : "";
   if (!text) { toast("Type a message first."); if (ta) ta.focus(); return; }
   btn.disabled = true;
+  btn.textContent = "Sending…";
   try {
     const res = await api.message(id, text);
-    if (res && res.ok) { toast("Message sent."); await refresh(); }
-    else { toast("That didn't send. Please try again."); btn.disabled = false; }
+    if (res && res.ok) {
+      toast("Message sent.");
+      if (ta) ta.value = ""; // clear before re-render so the draft snapshot doesn't resurrect it
+      // The server returns the updated request — merge it in place instead of a
+      // full refetch, so other threads' unsent drafts stay put.
+      if (res.request) updateLocalRequest(res.request);
+      else refresh();
+    } else {
+      toast("That didn't send. Please try again.");
+      btn.disabled = false;
+      btn.textContent = "Send";
+    }
   } catch (err) {
-    toast("That didn't send. Please try again."); btn.disabled = false;
+    toast("That didn't send. Please try again.");
+    btn.disabled = false;
+    btn.textContent = "Send";
   }
 });
 
@@ -767,7 +998,7 @@ ideasList.addEventListener("click", async (e) => {
   if (!idea) return;
   if (btn.getAttribute("data-act") === "use") {
     selectType(idea.type || "post");
-    reqDesc.value = idea.postIdea || "";
+    reqDesc.value = humanizeTimes(idea.postIdea || "");
     requestForm.scrollIntoView({ behavior: "smooth", block: "center" });
     reqDesc.focus();
     toast("Idea added below. Tweak it, then send.");

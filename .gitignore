@@ -4,3 +4,12 @@ node_modules/
 data/*.json
 worker/config.json
 *.local.json
+
+# auto-improve working dir
+.auto-improve/
+
+# live worker runtime artifacts — client data, never publish (GH Pages serves this repo)
+worker/.state.json
+worker/drain-jobs.json
+worker/logs/
+worker/out/

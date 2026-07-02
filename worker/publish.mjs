@@ -129,7 +129,15 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
     try {
       integrations = (await fetchIntegrations()) || [];
     } catch (e) {
-      integrations = [];
+      // Postiz itself is unreachable (it has real outage history). That is NOT a
+      // per-request failure: do not claim, error, or touch ANY row — leave everything
+      // 'approved' so the whole lane simply retries next tick once Postiz is back.
+      // The old behavior (integrations=[] → "No Postiz channels" → error) nuked
+      // approved creatives into the re-draft path over a transient blip.
+      console.error(
+        `[shipper] Postiz unreachable (${e && e.message ? e.message : e}) — deferring ${ships.length} approved post(s) to the next tick; drafts kept.`
+      );
+      return { shipped: 0, failed: 0, skipped: ships.length, deferred: true };
     }
 
     for (const req of ships) {
@@ -176,9 +184,12 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
         }
         shipped += 1;
       } else {
+        // phase:"publish" marks this as a POST-approval failure: the draft is intact
+        // and a requeue should re-approve (ship again), never wipe + re-draft. See
+        // core/model.mjs planRequeue.
         await apiUpdate(apiBase, adminToken, req.id, {
           action: "error",
-          meta: { ...baseMeta, run: { status: "error", error: result.error, finishedAt: tickNow.toISOString() } },
+          meta: { ...baseMeta, run: { status: "error", phase: "publish", error: result.error, finishedAt: tickNow.toISOString() } },
         });
         if (notifier && notifier.notifyShipFailed) await notifier.notifyShipFailed({ req, error: result.error });
         failed += 1;
