@@ -13,6 +13,7 @@
   "push": {
     "mode": "off",
     "url": "",
-    "_help": "mode: 'ntfy' (url = https://ntfy.sh/your-topic, title sent as a header) | 'json' (POST {title,message} to url) | 'off'. Point this at the same push you already use for the Postiz guardian."
+    "click": "",
+    "_help": "mode: 'ntfy' (url = https://ntfy.sh/your-topic, title sent as a header) | 'json' (POST {title,message} to url) | 'off'. Point this at the same push you already use for the Postiz guardian. Every push deep-links to the Desk (tapping the notification opens the queue); 'click' overrides the default GH Pages Desk URL. Failure pushes go out ntfy Priority high + a warning tag."
   }
 }

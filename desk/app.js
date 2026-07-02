@@ -125,9 +125,11 @@ function relTime(iso) {
 }
 
 function fmtEventDate(iso) {
-  const t = Date.parse(iso);
-  if (Number.isNaN(t)) return { main: iso || "Date to be set", yr: "" };
-  const d = new Date(t);
+  // "YYYY-MM-DD" parses as LOCAL midnight (matches the portal) — Date.parse would
+  // read it as UTC and show the previous day in US timezones.
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(Date.parse(iso));
+  if (Number.isNaN(d.getTime())) return { main: iso || "Date to be set", yr: "" };
   return {
     main: d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }),
     yr: String(d.getFullYear()),
@@ -850,10 +852,34 @@ function errorActions(r) {
   wrap.append(el("div", { class: "notebox err" }, el("strong", {}, "Error: "), document.createTextNode(msg)));
   const retry = el("button", { type: "button", class: "btn ghost sm" }, "Retry");
   retry.addEventListener("click", async () => {
-    // Re-queue — NOT action:"start", which maps error->drafting, a stage the worker
-    // ignores (it only picks up "queued"), so the request would strand. Clearing
-    // run.error stops the Desk showing the stale failure once it's back in the queue.
-    const meta = { ...(r.meta || {}), run: { ...((r.meta && r.meta.run) || {}), error: "" } };
+    const run = (r.meta && r.meta.run) || {};
+    // Publish-phase failure with a draft: the creative is already reviewed and
+    // approved, so FIRST try the V7 first-class requeue action — the backend keeps
+    // the draft and puts the request straight back in the SHIP lane ("approved").
+    // The live V6 backend doesn't know the action and rejects it (illegal
+    // transition); fall through SILENTLY to the legacy patch below, so the Desk
+    // works today and auto-upgrades the moment V7 deploys.
+    if (run.phase === "publish" && r.draft) {
+      setBusy(true);
+      try {
+        const rq = await api.update(r.id, { action: "requeue" });
+        if (rq && rq.ok !== false && !(rq.status >= 400) && rq.request) {
+          applyRequest(rq.request);
+          toast("Re-queued to publish — the approved draft was kept.");
+          render();
+          return;
+        }
+      } catch {
+        // network blip — the legacy path below surfaces real errors
+      } finally {
+        setBusy(false);
+      }
+    }
+    // Legacy path (V6 live today): direct re-queue for a fresh draft — NOT
+    // action:"start", which maps error->drafting, a stage the worker ignores (it
+    // only picks up "queued"), so the request would strand. Clearing run.error
+    // stops the Desk showing the stale failure once it's back in the queue.
+    const meta = { ...(r.meta || {}), run: { ...run, error: "" } };
     const res = await call(() => api.update(r.id, { stage: "queued", draft: null, meta }));
     if (res) { applyRequest(res.request); toast("Back in the queue."); render(); }
   });
@@ -1000,24 +1026,48 @@ function readyActions(r) {
 // ===================================================================
 // EVENTS view
 // ===================================================================
+// Local "today" as YYYY-MM-DD (no UTC surprises) — same date semantics as the
+// portal's past-event filter, so both apps flip an event to "past" at local midnight.
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+// Soonest first; undated events sink to the end instead of floating to the top.
+function cmpEventDateAsc(a, b) {
+  const da = String((a && a.date) || "");
+  const db = String((b && b.date) || "");
+  if (!da && !db) return 0;
+  if (!da) return 1;
+  if (!db) return -1;
+  return da.localeCompare(db);
+}
+
 function renderEvents() {
   const list = $("#events-list");
-  const rows = state.events.slice().sort((a, b) => Date.parse(a.date || 0) - Date.parse(b.date || 0));
+  // Upcoming (incl. today + undated) soonest-first on top; past events sink to the
+  // bottom, dimmed, most recently passed first. Local-date string compare matches
+  // the portal — no UTC parse pushing a late-night event into "past" early.
+  const today = todayISO();
+  const isPast = (e) => { const d = String((e && e.date) || "").slice(0, 10); return !!d && d < today; };
+  const upcoming = state.events.filter((e) => !isPast(e)).sort(cmpEventDateAsc);
+  const past = state.events.filter(isPast).sort((a, b) => cmpEventDateAsc(b, a));
+  const rows = [...upcoming, ...past];
 
   if (!rows.length) {
     list.replaceChildren(el("div", { class: "card empty" }, "No events yet. Clients add these from their portal."));
     return;
   }
 
-  list.replaceChildren(...rows.map((e) => eventCard(e)));
+  list.replaceChildren(...rows.map((e) => eventCard(e, isPast(e))));
 }
 
-function eventCard(e) {
+function eventCard(e, past = false) {
   const d = fmtEventDate(e.date);
   const startT = fmtTime(e.time);
   const endT = fmtTime(e.endTime);
   const timeText = startT ? (endT ? `${startT} – ${endT}` : startT) : "";
-  const card = el("div", { class: "card" });
+  const card = el("div", { class: past ? "card is-past" : "card" });
 
   card.append(el("div", { class: "req-head" },
     brandAvatar(state.clientById[e.clientId], e.clientId),

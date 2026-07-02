@@ -196,6 +196,7 @@
   font-variant-numeric: tabular-nums;
 }
 .evt-date .yr { color: var(--label-3); font-weight: 400; font-size: 13px; }
+.card.is-past { opacity: 0.55; } /* past events sink to the bottom, dimmed */
 
 /* ===================== Clients ===================== */
 .client-id { font-size: 13px; color: var(--label-2); font-variant-numeric: tabular-nums; letter-spacing: -0.1px; }

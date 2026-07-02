@@ -13,20 +13,45 @@ export function macNotify(title, message) {
   });
 }
 
+// Canonical Request Desk URL (GH Pages) for notification deep-links. Deliberately
+// carries NO admin key — the Desk restores its token from localStorage, so the
+// push channel never sees a secret. Override per-install via config.push.click.
+export const DESK_URL = "https://marshallhuffbiz-stack.github.io/nynm-client-hub/desk/";
+
+// Pure: the ntfy header set for one push. Every push deep-links to the Desk via
+// Click (tapping the notification opens the queue instead of the ntfy app);
+// urgent failures additionally get Priority high + a warning tag so they cut
+// through. Config-level push.headers always win last.
+export function ntfyHeaders(title, { click = DESK_URL, urgent = false, extra } = {}) {
+  return {
+    Title: title,
+    Click: click,
+    ...(urgent ? { Priority: "high", Tags: "warning" } : {}),
+    ...(extra || {}),
+  };
+}
+
 // Generic phone push. Supported config.push shapes:
-//   { mode: "ntfy", url: "https://ntfy.sh/your-topic" }     // title via Title header, body = message
-//   { mode: "json", url: "https://…", headers?: {} }         // POST {title,message}
+//   { mode: "ntfy", url: "https://ntfy.sh/your-topic", click?: "https://…" }  // headers via ntfyHeaders()
+//   { mode: "json", url: "https://…", headers?: {} }         // POST {title,message,click,urgent}
 //   { mode: "off" } or absent                                 // no-op
-export async function pushNotify(push, title, message) {
+// opts.urgent marks error/failure pushes (high priority + warning tag on ntfy).
+export async function pushNotify(push, title, message, opts = {}) {
   if (!push || !push.url || push.mode === "off") return false;
+  const click = push.click || DESK_URL;
+  const urgent = !!opts.urgent;
   try {
     if (push.mode === "ntfy") {
-      await fetch(push.url, { method: "POST", headers: { Title: title, ...(push.headers || {}) }, body: message });
+      await fetch(push.url, {
+        method: "POST",
+        headers: ntfyHeaders(title, { click, urgent, extra: push.headers }),
+        body: message,
+      });
     } else {
       await fetch(push.url, {
         method: "POST",
         headers: { "content-type": "application/json", ...(push.headers || {}) },
-        body: JSON.stringify({ title, message }),
+        body: JSON.stringify({ title, message, click, urgent }),
       });
     }
     return true;
@@ -55,7 +80,7 @@ export function makeNotifier(config = {}) {
       const title = "Relay worker paused";
       const msg = `The Mac is low on disk (${freeMB} MB free). ${count} post${count === 1 ? "" : "s"} flagged. Free space, then tap Retry on the Desk.`;
       await macNotify(title, msg);
-      await pushNotify(push, title, msg);
+      await pushNotify(push, title, msg, { urgent: true });
     },
     async notifyShipped({ req, channels }) {
       const title = "Relay — published";
@@ -70,7 +95,7 @@ export function makeNotifier(config = {}) {
       const title = "Relay — publish failed";
       const msg = `${req.clientId}: "${req.title || req.type}" didn't publish. ${error || ""}`.trim();
       await macNotify(title, msg);
-      await pushNotify(push, title, msg);
+      await pushNotify(push, title, msg, { urgent: true });
     },
     async notifyAutoEvent({ entry, scheduledFor, site }) {
       const title = "Relay — event auto-scheduled";
