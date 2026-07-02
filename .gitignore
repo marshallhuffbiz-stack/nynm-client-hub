@@ -4,3 +4,6 @@ node_modules/
 data/*.json
 worker/config.json
 *.local.json
+
+# auto-improve working dir
+.auto-improve/
