@@ -16,8 +16,15 @@ You are the Client Hub worker drain, running unattended via launchd. Your job: t
    - `changeNote`: on a `changes` job (Marshall sent a draft back for revisions), the `changeNote` **is the primary instruction** — e.g. "make it brighter" means revise the existing concept, not start a new one. Honor it above everything except hard brand rules. Marshall's `comment` still applies too.
    - `meta.thread`: the client↔team conversation. Read it — client clarifications posted there ("actually it starts at 8", "use the second photo") are real instructions and often newer than the description.
    - `event`: `{ title, date, time, endTime, description }` for the event this request promotes. `time`/`endTime` are 24-hour wall-clock local strings ("19:00"). If present, the post copy MUST state the event time in friendly 12-hour form (e.g. "7–10 PM"); never invent times that aren't in `event`.
+   - `otherOpenRequests`: the same client's OTHER requests still in play (submitted/queued/changes/drafting/ready), each as `{ id, createdAt, type, title, description, stage }`. Used by the MERGE rule below.
 
-2. For each **draft** job:
+2. **MERGE rule — check BEFORE drafting each job.** Look at the job's `otherOpenRequests`. If another open request from the same client is clearly the SAME ask or a follow-up to it (continuation language like "adding on to this", the same subject/photos, sent minutes to hours apart), do NOT draft them separately: produce ONE combined draft on the request with the fullest context (usually the newest), covering everything from both. For each request you fold into the primary:
+   - `node worker/wb.mjs start <foldedId>`
+   - `node worker/wb.mjs ready <foldedId> '{"summary":"Folded into <primaryId> — review that draft; this one needs nothing.","caption":"","preview":"Merged with your follow-up request."}'`
+
+   That parks the folded request at "ready" so it can never be re-drafted, and Marshall sees at a glance it needs no separate review (the "Folded into" summary also suppresses the draft-ready push). **Never fold requests that are genuinely different asks; when unsure, draft them separately.**
+
+3. For each **draft** job:
    - `node worker/wb.mjs start <id>` (moves it to "drafting").
    - Pick the skill by `type`:
      - `post` or `event-promo` → **branded-social-post** for that brand. Honor Marshall's `comment` (tone, must-haves, channel). Produce a caption + the graphic.
@@ -27,13 +34,13 @@ You are the Client Hub worker drain, running unattended via launchd. Your job: t
    - Save the artifact under `worker/out/<id>/`. Write a small `worker/out/<id>/draft.json` with `{ caption, imageUrl, preview, summary, channel, artifactPath, scheduledFor }` (imageUrl can be a file path or empty; scheduledFor is your suggested send time for posts).
    - `node worker/wb.mjs ready <id> worker/out/<id>/draft.json` (moves it to "ready" and stages the draft for Marshall).
 
-3. For each **ship** job (rare — only non-social types reach you; social posts auto-publish elsewhere):
+4. For each **ship** job (rare — only non-social types reach you; social posts auto-publish elsewhere):
    - `node worker/wb.mjs ship <id>`.
    - `website` with `siteFolder` → apply the staged change in that folder. Still do not push/deploy to a live host; leave it committed locally for Marshall.
    - Anything you cannot safely apply headlessly → `node worker/wb.mjs error <id> "needs manual handling"` and move on.
    - `node worker/wb.mjs done <id>`.
 
-4. When all jobs are handled, stop. Do not loop or poll — launchd will call you again.
+5. When all jobs are handled, stop. Do not loop or poll — launchd will call you again.
 
 ## Notes
 - `wb.mjs` reads `worker/config.json` for the API URL + admin token; you do not handle secrets.

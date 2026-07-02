@@ -9,6 +9,7 @@ import { resolve as resolvePath, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { homedir } from "node:os";
+import { apiMessage as defaultApiMessage } from "./writeback.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
@@ -114,13 +115,24 @@ export async function shipRequest(req, { client, integrations, postiz, now, repo
   return { ok: true, channels: postIds.map((p) => p.channel), postIds, failures };
 }
 
+// Client-facing "it's live" message for the request thread. Warm, no em dashes.
+// type "post" reads as "your post"; other types read sensibly ("event-promo" →
+// "your event promo"). Channels are the ones that ACTUALLY published.
+const CHANNEL_LABEL = { facebook: "Facebook", instagram: "Instagram" };
+export function composeClientLiveMessage({ type, channels } = {}) {
+  const noun = String(type || "post").trim().replace(/-/g, " ") || "post";
+  const where = (channels || []).map((c) => CHANNEL_LABEL[c] || c).join(" + ") || "social";
+  return `Your ${noun} is live on ${where}. Thanks for sending it our way!`;
+}
+
 // The impure wrapper the poller injects. For each approved ("ship") request it:
 //   apiUpdate(action:"ship")  approved -> shipping  (also the idempotency guard:
 //     detectJobs only re-picks "approved", so a crash mid-publish never double-posts)
 //   shipRequest(...)          publish to the client's channels
 //   on ok  -> apiUpdate(action:"done", meta.run)  + notifyShipped
+//              + apiMessage into the client's request thread ("Your post is live…")
 //   on err -> apiUpdate(action:"error", meta.run) + notifyShipFailed
-export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, now = () => new Date(), repoRoot = REPO_ROOT }) {
+export function makeShipper({ fetchIntegrations, postiz, apiUpdate, apiMessage = defaultApiMessage, notifier, now = () => new Date(), repoRoot = REPO_ROOT }) {
   return async ({ apiBase, adminToken, ships = [], clients = [] }) => {
     let shipped = 0;
     let failed = 0;
@@ -175,6 +187,11 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, notifier, no
         // "shipping" while notifyShipped has already told Marshall it's live.
         let doneRes = await apiUpdate(apiBase, adminToken, req.id, donePatch);
         if (!doneRes || doneRes.ok !== true) doneRes = await apiUpdate(apiBase, adminToken, req.id, donePatch);
+        // Close the client loop: tell the client in their request thread that it's
+        // live. Best-effort — a failed thread message must never fail the ship.
+        try {
+          await apiMessage(apiBase, adminToken, req.id, composeClientLiveMessage({ type: req.type, channels: result.channels }));
+        } catch { /* non-fatal */ }
         if (notifier && notifier.notifyShipped) await notifier.notifyShipped({ req, channels: result.channels, postIds: result.postIds });
         if (partial.length && notifier && notifier.notifyShipFailed) {
           await notifier.notifyShipFailed({ req, error: "Some channels didn't post: " + partial.map((f) => f.channel).join(", ") });

@@ -277,3 +277,116 @@ test("postMessage threads client + team replies; empty + missing rejected", asyn
   const missing = await post({ admin: "testadmin", action: "postMessage", id: "req_nope", text: "hi" });
   assert.equal(missing.status, 404);
 });
+
+// [V9] Regression pin for the "done requests vanish from the portal" hold
+// (.auto-improve/holds.md, 2026-07-01): mergePatch is a blind overlay, so a patch
+// carrying id/clientId/createdAt (a caller echoing a fetched row, or a blank
+// clientId) re-keyed or de-tenanted the row and the client GET (which filters on
+// clientId) lost it. Identity fields must be immutable through updateRequest.
+test("done+type patch keeps the request visible to its client; identity fields immutable", async () => {
+  // Second tenant so we can prove the row neither vanishes nor jumps tenants.
+  const up = await post({ admin: "testadmin", action: "upsertClient", client: { clientId: "eats", name: "Eats" } });
+  assert.equal(up.status, 200);
+  const eatsTok = up.body.token;
+
+  const created = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "vanish regression" } });
+  const id = created.body.id;
+
+  // The exact patch from the observed hold: stage=done + type=website.
+  const done = await post({ admin: "testadmin", action: "updateRequest", id, patch: { stage: "done", type: "website" } });
+  assert.equal(done.status, 200);
+  assert.equal(done.body.request.stage, "done");
+  assert.equal(done.body.request.type, "website");
+  assert.equal(done.body.request.clientId, "the-o");
+  const afterDone = await get("?c=tok-o");
+  assert.ok(afterDone.body.requests.some((r) => r.id === id), "done request must stay visible to its client");
+
+  // Hostile/echoed patches must not re-key or de-tenant the row.
+  const createdAt = done.body.request.createdAt;
+  const hijack = await post({
+    admin: "testadmin",
+    action: "updateRequest",
+    id,
+    patch: { id: "req_hijacked", clientId: "eats", createdAt: "1999-01-01T00:00:00.000Z", comment: "still here" },
+  });
+  assert.equal(hijack.status, 200);
+  assert.equal(hijack.body.request.id, id, "id is immutable through patches");
+  assert.equal(hijack.body.request.clientId, "the-o", "clientId is immutable through patches");
+  assert.equal(hijack.body.request.createdAt, createdAt, "createdAt is immutable through patches");
+  assert.equal(hijack.body.request.comment, "still here", "non-identity keys still patch");
+
+  const blank = await post({ admin: "testadmin", action: "updateRequest", id, patch: { clientId: "" } });
+  assert.equal(blank.body.request.clientId, "the-o");
+
+  const oView = await get("?c=tok-o");
+  assert.ok(oView.body.requests.some((r) => r.id === id), "request still visible to its own client");
+  const eatsView = await get(`?c=${eatsTok}`);
+  assert.ok(!eatsView.body.requests.some((r) => r.id === id), "request never leaks into another tenant");
+});
+
+// ---------------------------------------------------------------------------
+// [V9] Pure-JS mirror of apps-script/Code.gs normalizeTimeCell_ / normalizeDateCell_.
+// Google Sheets coerces a "16:00" string into a time cell; GAS reads it back as a
+// Date on the Sheets epoch (1899-12-30T16:00), and the live API used to serialize
+// that junk ("1899-12-30T16:00:00.000Z") while the portal expected "HH:MM".
+// The mock's JSON store can never hold Date objects, so the normalization lives
+// ONLY in Code.gs — this replica pins the algorithm (keep the two in sync by hand;
+// Utilities.formatDate(date, tz, pattern) is shimmed with Intl below).
+// ---------------------------------------------------------------------------
+function formatDateShim(d, tz, pattern) {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(d).reduce((o, p) => ((o[p.type] = p.value), o), {});
+  if (pattern === "HH:mm") return `${parts.hour}:${parts.minute}`;
+  if (pattern === "yyyy-MM-dd") return `${parts.year}-${parts.month}-${parts.day}`;
+  throw new Error("unsupported pattern " + pattern);
+}
+
+// Mirrors Code.gs normalizeTimeCell_ (tz passed explicitly; GAS uses sheetTz_()).
+function normalizeTimeCellMirror(raw, tz) {
+  if (raw === null || raw === undefined || raw === "") return "";
+  if (Object.prototype.toString.call(raw) === "[object Date]") {
+    return formatDateShim(raw, tz, "HH:mm");
+  }
+  let s = String(raw).trim();
+  if (s.charAt(0) === "'") s = s.slice(1); // stray text-forcing apostrophe
+  const m = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(s);
+  if (m) return ("0" + m[1]).slice(-2) + ":" + m[2];
+  return s;
+}
+
+// Mirrors Code.gs normalizeDateCell_.
+function normalizeDateCellMirror(raw, tz) {
+  if (raw === null || raw === undefined || raw === "") return "";
+  if (Object.prototype.toString.call(raw) === "[object Date]") {
+    return formatDateShim(raw, tz, "yyyy-MM-dd");
+  }
+  let s = String(raw).trim();
+  if (s.charAt(0) === "'") s = s.slice(1);
+  return s;
+}
+
+test("[Code.gs mirror] Sheets time/date cells normalize to HH:MM / YYYY-MM-DD strings", () => {
+  // The signature junk value: a "16:00" cell read back as a Sheets-epoch Date.
+  assert.equal(normalizeTimeCellMirror(new Date("1899-12-30T16:00:00.000Z"), "UTC"), "16:00");
+  // Any Date landing in a time column normalizes, epoch or not.
+  assert.equal(normalizeTimeCellMirror(new Date("2026-07-04T09:05:00.000Z"), "UTC"), "09:05");
+  // Wall-clock time respects the spreadsheet timezone, not UTC.
+  assert.equal(normalizeTimeCellMirror(new Date("2026-07-04T23:30:00.000Z"), "America/New_York"), "19:30");
+  // String forms: pass through / trim seconds / zero-pad.
+  assert.equal(normalizeTimeCellMirror("16:00", "UTC"), "16:00");
+  assert.equal(normalizeTimeCellMirror("16:00:00", "UTC"), "16:00");
+  assert.equal(normalizeTimeCellMirror("9:30", "UTC"), "09:30");
+  assert.equal(normalizeTimeCellMirror("", "UTC"), "");
+  assert.equal(normalizeTimeCellMirror(null, "UTC"), "");
+  // Unparseable content passes through untouched (never throws).
+  assert.equal(normalizeTimeCellMirror("TBD", "UTC"), "TBD");
+  // A stray literal text-forcing apostrophe (harness/CSV round-trips) is stripped.
+  assert.equal(normalizeTimeCellMirror("'19:30", "UTC"), "19:30");
+
+  assert.equal(normalizeDateCellMirror(new Date("2026-07-04T00:00:00.000Z"), "UTC"), "2026-07-04");
+  assert.equal(normalizeDateCellMirror(new Date("2026-07-04T05:00:00.000Z"), "America/New_York"), "2026-07-04");
+  assert.equal(normalizeDateCellMirror("2026-07-04", "UTC"), "2026-07-04");
+  assert.equal(normalizeDateCellMirror("", "UTC"), "");
+});

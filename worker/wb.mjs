@@ -10,6 +10,7 @@ import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { apiUpdate, apiUpload, apiFetchAll } from "./writeback.mjs";
 import { errorPatch } from "./wb-core.mjs";
+import { shouldNotifyReady } from "./jobs.mjs";
 import { makeNotifier } from "./notify.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -83,7 +84,9 @@ const res = await apiUpdate(cfg.execUrl, cfg.adminToken, id, patch);
 
 // A staged draft is the moment Marshall can act — push it to his phone. Best-effort:
 // a failed push must never fail the writeback (the draft is already staged).
-if (cmd === "ready" && res && res.ok !== false) {
+// EXCEPT a "Folded into <id>" placeholder (a follow-up request merged into its
+// primary by the drain) — that draft needs no review, so no loud push for it.
+if (cmd === "ready" && res && res.ok !== false && shouldNotifyReady(patch.draft)) {
   try {
     const row = res.request || {};
     await makeNotifier(cfg).notifyReady({

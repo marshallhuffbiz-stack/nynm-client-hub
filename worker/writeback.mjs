@@ -30,6 +30,16 @@ export function apiUpdate(apiBase, adminToken, id, patch) {
   });
 }
 
+// Post a message into a request's client↔team thread as admin (the backend's
+// postMessage action). Used by the shipper to tell the client their post is live.
+export function apiMessage(apiBase, adminToken, id, text) {
+  return fetchJson(apiBase, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: adminToken, action: "postMessage", id, text }),
+  });
+}
+
 // Upload a file (base64) and get back a hosted URL (Drive in prod). Used by the
 // drain to turn a locally-rendered draft image into something the Desk can show.
 export function apiUpload(apiBase, adminToken, file) {
