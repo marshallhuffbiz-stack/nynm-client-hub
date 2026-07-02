@@ -146,6 +146,9 @@ const STAGE_LABELS = {
   approved: "Ready",
   shipping: "Ready",
   done: "Posted",
+  // A failed run is NYNM's problem to fix, not the client's — never show a
+  // scary/stale state; the Desk surfaces it red on Marshall's side.
+  error: "In progress",
 };
 const STAGE_BADGE = {
   submitted: "bone",   // New -> gray
@@ -156,7 +159,11 @@ const STAGE_BADGE = {
   approved: "go",
   shipping: "go",
   done: "bone",        // Posted -> gray
+  error: "send",
 };
+
+// "Posted" only makes sense for social work; website/design/other finish as "Done".
+const DONE_LABEL_BY_TYPE = { post: "Posted", "event-promo": "Posted", event: "Posted" };
 
 const TYPE_LABELS = {
   post: "Post",
@@ -230,8 +237,9 @@ function esc(value) {
 
 /* ---------- formatting ---------- */
 
-function stageBadge(stage) {
-  const label = STAGE_LABELS[stage] || "Submitted";
+function stageBadge(stage, type) {
+  let label = STAGE_LABELS[stage] || "Received";
+  if (stage === "done") label = DONE_LABEL_BY_TYPE[type] || "Done";
   const color = STAGE_BADGE[stage] || "bone";
   return `<span class="badge ${color} stage">${esc(label)}</span>`;
 }
@@ -385,7 +393,7 @@ function renderRequests(requests) {
               ${photoMeta}
             </div>
           </div>
-          ${stageBadge(req && req.stage)}
+          ${stageBadge(req && req.stage, req && req.type)}
         </div>
         ${threadHtml(req)}
       </div>`;
