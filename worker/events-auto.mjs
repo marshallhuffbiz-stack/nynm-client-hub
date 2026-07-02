@@ -76,6 +76,27 @@ function displayDate(ymd) {
   return `${WD[dt.getUTCDay()]} · ${MON[m - 1]} ${d}`;
 }
 
+// Convert an extractor-style human time ("11 AM", "7:05 pm") or a 24-hour "HH:MM"
+// portal time ("19:30") to "HH:MM:SS" for isoDate. Unparseable -> "" so the caller
+// can fall back. (buildSiteEvent used to expect `startTime24`, which no caller ever
+// set — every site entry silently got the 09:00 default even when a start time was
+// extracted; this derives it from the time we actually have.)
+export function to24h(t) {
+  const s = String(t == null ? "" : t).trim();
+  if (!s) return "";
+  let m = s.match(/^([01]?\d|2[0-3]):([0-5]\d)$/); // already 24-hour "HH:MM"
+  if (m) return `${String(Number(m[1])).padStart(2, "0")}:${m[2]}:00`;
+  m = s.match(/^(\d{1,2})(?::([0-5]\d))?\s*([AaPp])\.?[Mm]\.?$/); // "11 AM" / "7:05 pm"
+  if (!m) return "";
+  let h = Number(m[1]);
+  if (h < 1 || h > 12) return "";
+  const min = m[2] || "00";
+  const pm = m[3].toLowerCase() === "p";
+  if (pm && h !== 12) h += 12;
+  if (!pm && h === 12) h = 0;
+  return `${String(h).padStart(2, "0")}:${min}:00`;
+}
+
 // Compact a display time ("11 AM" -> "11A", "4 PM" -> "4P", "11:30 AM" -> "11:30A").
 function compactTime(t) {
   return String(t || "")
@@ -91,7 +112,7 @@ export function buildSiteEvent(ex) {
   const ymd = ex.ymd;
   const kind = ex.kind === "event" ? "event" : "vendor-day";
   const title = (ex.title && String(ex.title).trim()) || "Food truck";
-  const start24 = ex.startTime24 || "09:00:00";
+  const start24 = ex.startTime24 || to24h(ex.timeStart) || "09:00:00";
   const timeRange =
     ex.timeStart && ex.timeEnd
       ? `${compactTime(ex.timeStart)}–${compactTime(ex.timeEnd)}`

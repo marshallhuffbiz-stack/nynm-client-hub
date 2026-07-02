@@ -246,6 +246,39 @@ test("makeShipper: preserves existing meta (thread/activity/notified) on done", 
   assert.equal(done.patch.meta.run.status, "shipped");
 });
 
+test("makeShipper: fetchIntegrations throws (Postiz down) → whole ship lane deferred, rows untouched", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz();
+  const notes = [];
+  const shipper = makeShipper({
+    fetchIntegrations: async () => { throw new Error("connect ECONNREFUSED"); },
+    postiz: pz,
+    apiUpdate: api.apiUpdate,
+    notifier: { async notifyShipped() {}, async notifyShipFailed(x) { notes.push(x); } },
+    now: () => NOW,
+    repoRoot: "/repo",
+  });
+  const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.equal(res.shipped, 0);
+  assert.equal(res.failed, 0, "a Postiz outage is NOT a per-request failure");
+  assert.equal(res.skipped, 1);
+  assert.equal(res.deferred, true);
+  assert.equal(api.patches.length, 0, "no writebacks — rows stay 'approved' and retry next tick");
+  assert.equal(pz.calls.posts.length, 0);
+  assert.equal(notes.length, 0, "no scary per-request error push for a transient outage");
+});
+
+test("makeShipper: publish-side error keeps the draft and tags run.phase='publish' (requeue ships, not re-drafts)", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz({ postThrows: true });
+  const shipper = makeShipper({ fetchIntegrations: async () => INTEGRATIONS, postiz: pz, apiUpdate: api.apiUpdate, notifier: {}, now: () => NOW, repoRoot: "/repo" });
+  await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  const err = api.patches.find((p) => p.patch.action === "error");
+  assert.ok(err, "error writeback sent");
+  assert.equal(err.patch.meta.run.phase, "publish");
+  assert.ok(!("draft" in err.patch), "the approved draft is never wiped by a publish failure");
+});
+
 test("makeShipper: retries the done writeback once if it fails (no wedge, still shipped)", async () => {
   const pz = fakePostiz();
   const calls = [];

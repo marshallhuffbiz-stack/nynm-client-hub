@@ -13,6 +13,7 @@ import {
   validatePin,
   mergePatch,
   isStale,
+  planRequeue,
 } from "./model.mjs";
 import { genId, genToken } from "./ids.mjs";
 
@@ -145,4 +146,25 @@ test("genId + genToken format", () => {
   assert.match(genId("req"), /^req_[a-z0-9]+_[a-z0-9]+$/i);
   assert.ok(genToken(24).length >= 24);
   assert.notEqual(genToken(), genToken());
+});
+
+test("planRequeue: publish-phase error with a draft → re-approve (ship again), draft kept", () => {
+  const req = { id: "r1", stage: "error", draft: { caption: "approved creative" }, meta: { run: { status: "error", phase: "publish", error: "Postiz blip" } } };
+  const patch = planRequeue(req);
+  assert.equal(patch.stage, "approved");
+  assert.ok(!("draft" in patch), "the approved draft must not be wiped");
+});
+
+test("planRequeue: draft-phase error → back to queued for a fresh draft", () => {
+  const req = { id: "r2", stage: "error", draft: null, meta: { run: { status: "error", phase: "draft", error: "render failed" } } };
+  assert.deepEqual(planRequeue(req), { stage: "queued", draft: null });
+});
+
+test("planRequeue: no phase info (legacy rows) → conservative re-draft, even with a draft present", () => {
+  assert.deepEqual(planRequeue({ id: "r3", stage: "error", draft: { caption: "x" }, meta: { run: { error: "?" } } }), { stage: "queued", draft: null });
+  assert.deepEqual(planRequeue({}), { stage: "queued", draft: null });
+});
+
+test("planRequeue: publish-phase error but the draft is gone → must re-draft (nothing to ship)", () => {
+  assert.deepEqual(planRequeue({ id: "r4", stage: "error", draft: null, meta: { run: { phase: "publish" } } }), { stage: "queued", draft: null });
 });

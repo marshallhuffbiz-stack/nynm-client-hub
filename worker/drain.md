@@ -12,7 +12,10 @@ You are the Client Hub worker drain, running unattended via launchd. Your job: t
 - Keep each client in their own brand: read `brandSlug` and use that brand. If `brandSlug` is empty, note it in the draft summary and use a clean neutral treatment.
 
 ## Steps
-1. Read `worker/drain-jobs.json`. It has `drafts: [...]` and `ships: [...]`. Each item has: `id, clientId, type, title, description, comment, attachments, brandSlug, siteFolder, scheduledFor`.
+1. Read `worker/drain-jobs.json`. It has `drafts: [...]` and `ships: [...]`. Each item has: `id, clientId, clientName, type, title, description, comment, changeNote, attachments, brandSlug, siteFolder, scheduledFor, meta` — and, for event promos, an `event` object (see below).
+   - `changeNote`: on a `changes` job (Marshall sent a draft back for revisions), the `changeNote` **is the primary instruction** — e.g. "make it brighter" means revise the existing concept, not start a new one. Honor it above everything except hard brand rules. Marshall's `comment` still applies too.
+   - `meta.thread`: the client↔team conversation. Read it — client clarifications posted there ("actually it starts at 8", "use the second photo") are real instructions and often newer than the description.
+   - `event`: `{ title, date, time, endTime, description }` for the event this request promotes. `time`/`endTime` are 24-hour wall-clock local strings ("19:00"). If present, the post copy MUST state the event time in friendly 12-hour form (e.g. "7–10 PM"); never invent times that aren't in `event`.
 
 2. For each **draft** job:
    - `node worker/wb.mjs start <id>` (moves it to "drafting").

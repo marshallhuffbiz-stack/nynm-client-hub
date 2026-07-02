@@ -66,9 +66,10 @@ cp "/Users/MarshallHuff/New General/client-hub/worker/com.nynm.client-worker.pli
 launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.nynm.client-worker.plist
 launchctl kickstart -k gui/$(id -u)/com.nynm.client-worker
 ```
-It runs every 5 minutes: notifies you of new requests, stages drafts for queued ones, ships approved ones. Watch `worker/logs/out.log` and `worker/logs/err.log`.
+It runs every **90 seconds** (the plist's `StartInterval`): notifies you of new requests, stages drafts for queued ones, ships approved ones. Watch `worker/logs/out.log` and `worker/logs/err.log`.
 - Stop it: `launchctl bootout gui/$(id -u)/com.nynm.client-worker`
 - If you change node versions, update the node path in the plist (`which node`).
+- **Poll cadence:** `StartInterval` in the plist is the reaction-latency knob — every submit / Send-to-Claude / approve waits up to one full interval, and a no-work tick is just one ~1s GET (far under Apps Script quota), so 90s is cheap. To change it: edit the plist, re-copy it to `~/Library/LaunchAgents`, then `bootout` + `bootstrap` again.
 
 ---
 

@@ -1,6 +1,6 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
@@ -16,13 +16,13 @@ before(async () => {
     storePath,
     JSON.stringify({
       settings: { adminToken: "A" },
-      clients: [{ clientId: "the-o", name: "The O", token: "t", active: true }],
+      clients: [{ clientId: "the-o", name: "The O", token: "t", active: true, brandSlug: "the-o-brand", siteFolder: "/sites/the-o" }],
       requests: [
         { id: "s1", clientId: "the-o", type: "post", title: "new one", stage: "submitted", meta: {} },
-        { id: "q1", clientId: "the-o", type: "design", title: "draft me", stage: "queued", meta: {} },
+        { id: "q1", clientId: "the-o", type: "design", title: "draft me", stage: "queued", eventId: "evt1", meta: {} },
         { id: "a1", clientId: "the-o", type: "post", title: "ship me", stage: "approved", meta: {} },
       ],
-      events: [],
+      events: [{ eventId: "evt1", clientId: "the-o", title: "Trivia Night", date: "2026-07-04", time: "19:00", endTime: "22:00", description: "weekly trivia", promoted: true, requestId: "q1" }],
     })
   );
   srv = createApp({ storePath });
@@ -43,7 +43,9 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
     async notifyDigest() { digestCalled++; },
   };
   // Stub drainer = the headless Claude drain (drafts only now; social ships go to the shipper).
+  let seenDrafts = null;
   const drainer = async ({ apiBase, adminToken, drafts }) => {
+    seenDrafts = drafts;
     for (const d of drafts) {
       await apiUpdate(apiBase, adminToken, d.id, { action: "start" });
       await apiUpdate(apiBase, adminToken, d.id, { action: "ready", draft: { caption: "stub" } });
@@ -75,6 +77,17 @@ test("runOnce notifies new, drafts queued, ships approved, sends digest", async 
   assert.deepEqual(notified, ["s1"]);
   assert.equal(res.drafts, 1);
   assert.equal(res.ships, 1);
+
+  // The drain brief must arrive ENRICHED: client join (brandSlug/siteFolder/clientName)
+  // so the drafter never falls back to "neutral treatment", and the event times so a
+  // promo can actually say "7–10 PM".
+  assert.equal(seenDrafts.length, 1);
+  assert.equal(seenDrafts[0].brandSlug, "the-o-brand");
+  assert.equal(seenDrafts[0].siteFolder, "/sites/the-o");
+  assert.equal(seenDrafts[0].clientName, "The O");
+  assert.equal(seenDrafts[0].event.title, "Trivia Night");
+  assert.equal(seenDrafts[0].event.time, "19:00");
+  assert.equal(seenDrafts[0].event.endTime, "22:00");
   assert.equal(res.published, 1);
   assert.equal(res.digest, true);
   assert.equal(digestCalled, 1);
@@ -174,6 +187,32 @@ test("runOnce auto-recovers an orphaned 'drafting' row by re-queueing it", async
   assert.equal(all.requests.find((r) => r.id === id).stage, "queued"); // re-queued, no longer stranded
 });
 
+test("runOnce recovers an orphaned 'shipping' row back to the SHIP lane with its draft intact", async () => {
+  const created = await fetch(base, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "post", description: "shipping orphan test" } }),
+  }).then((r) => r.json());
+  const id = created.id;
+  await apiUpdate(base, "A", id, { action: "send" });   // -> queued
+  await apiUpdate(base, "A", id, { action: "start" });  // -> drafting
+  await apiUpdate(base, "A", id, { action: "ready", draft: { caption: "approved creative" } }); // -> ready
+  await apiUpdate(base, "A", id, { action: "approve" }); // -> approved
+  await apiUpdate(base, "A", id, { action: "ship" });    // -> shipping, then the shipper "dies"
+
+  const res = await runOnce({
+    apiBase: base, adminToken: "A", caps: { draft: 5, ship: 5 },
+    drainer: async () => ({ drafted: 0 }),
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    orphanMaxAgeMs: 0, maxRequeues: 3,
+    now: new Date(Date.now() + 60_000),
+  });
+  assert.ok(res.recovered >= 1, "shipping orphan counted as recovered");
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const row = all.requests.find((r) => r.id === id);
+  assert.equal(row.stage, "approved"); // back in the ship lane — never re-drafted
+  assert.equal(row.draft.caption, "approved creative"); // draft preserved
+});
+
 test("spawnClaudeDrain hard-kills a wedged drain so it never holds the lock forever", async () => {
   const killed = [];
   const fakeChild = { on() {}, kill(sig) { killed.push(sig); } }; // never emits close -> simulates a hang
@@ -239,6 +278,13 @@ test("uploadAttachment rejects an oversized file (413)", async () => {
   assert.equal(r.status, 413);
   const body = await r.json();
   assert.equal(body.ok, false);
+});
+
+test("worker plist template ticks every 90s (a no-work tick is one cheap GET; 300s made every human interaction wait ~5 min)", async () => {
+  const xml = await readFile(new URL("./com.nynm.client-worker.plist", import.meta.url), "utf8");
+  const m = xml.match(/<key>StartInterval<\/key>\s*<integer>(\d+)<\/integer>/);
+  assert.ok(m, "plist template has a StartInterval");
+  assert.equal(Number(m[1]), 90);
 });
 
 test("submitRequest is idempotent on clientRequestId (no duplicate on a retry)", async () => {

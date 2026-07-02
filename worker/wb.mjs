@@ -8,7 +8,8 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { apiUpdate, apiUpload } from "./writeback.mjs";
+import { apiUpdate, apiUpload, apiFetchAll } from "./writeback.mjs";
+import { errorPatch } from "./wb-core.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(await readFile(join(HERE, "config.json"), "utf8"));
@@ -58,9 +59,20 @@ switch (cmd) {
   case "done":
     patch = { action: "done" };
     break;
-  case "error":
-    patch = { action: "error", meta: { run: { status: "error", error: arg || "drain error", finishedAt: new Date().toISOString() } } };
+  case "error": {
+    // Fetch the row first and MERGE into its current meta — a bare meta:{run} would
+    // clobber the thread/activity/notified/idempotency fields (see wb-core.mjs).
+    // If the fetch fails we still write the error with what we have (an un-merged
+    // error beats a silently missing one).
+    let currentMeta = {};
+    try {
+      const all = await apiFetchAll(cfg.execUrl, cfg.adminToken);
+      const row = all && Array.isArray(all.requests) ? all.requests.find((r) => r.id === id) : null;
+      if (row && row.meta && typeof row.meta === "object") currentMeta = row.meta;
+    } catch {}
+    patch = errorPatch(currentMeta, arg);
     break;
+  }
   default:
     console.error("unknown cmd", cmd);
     process.exit(2);
