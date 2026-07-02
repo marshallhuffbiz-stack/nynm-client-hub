@@ -96,8 +96,8 @@ export async function runOnce({
       (await drainer({
         apiBase,
         adminToken,
-        drafts: enrichJobs(jobs.drafts, clients, events),
-        ships: enrichJobs(drainShips, clients, events),
+        drafts: enrichJobs(jobs.drafts, clients, events, reqs),
+        ships: enrichJobs(drainShips, clients, events, reqs),
       })) || drainResult;
   }
 

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { resolveChannels, publishTimes, shipRequest, makeShipper, postsCreateArgs } from "./publish.mjs";
+import { resolveChannels, publishTimes, shipRequest, makeShipper, postsCreateArgs, composeClientLiveMessage } from "./publish.mjs";
+import { apiMessage } from "./writeback.mjs";
 
 const NOW = new Date("2026-06-19T17:00:00Z");
 
@@ -277,6 +278,132 @@ test("makeShipper: publish-side error keeps the draft and tags run.phase='publis
   assert.ok(err, "error writeback sent");
   assert.equal(err.patch.meta.run.phase, "publish");
   assert.ok(!("draft" in err.patch), "the approved draft is never wiped by a publish failure");
+});
+
+// --- composeClientLiveMessage (client-facing "it's live" thread message) ---
+
+test("composeClientLiveMessage: post on FB+IG → warm, exact copy, no em dashes", () => {
+  const msg = composeClientLiveMessage({ type: "post", channels: ["facebook", "instagram"] });
+  assert.equal(msg, "Your post is live on Facebook + Instagram. Thanks for sending it our way!");
+  assert.ok(!msg.includes("—"), "no em dashes in client-facing copy");
+});
+
+test("composeClientLiveMessage: non-post types read sensibly (event-promo → event promo)", () => {
+  assert.equal(
+    composeClientLiveMessage({ type: "event-promo", channels: ["facebook"] }),
+    "Your event promo is live on Facebook. Thanks for sending it our way!"
+  );
+});
+
+test("composeClientLiveMessage: unknown channels pass through, empty channels → 'social', empty type → 'post'", () => {
+  assert.equal(
+    composeClientLiveMessage({ type: "post", channels: ["tiktok"] }),
+    "Your post is live on tiktok. Thanks for sending it our way!"
+  );
+  assert.equal(
+    composeClientLiveMessage({ type: "", channels: [] }),
+    "Your post is live on social. Thanks for sending it our way!"
+  );
+});
+
+// --- makeShipper: close the client loop on publish ---
+
+test("makeShipper: successful publish posts the good news into the client's request thread", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz();
+  const msgs = [];
+  const shipper = makeShipper({
+    fetchIntegrations: async () => INTEGRATIONS,
+    postiz: pz,
+    apiUpdate: api.apiUpdate,
+    apiMessage: async (base, tok, id, text) => { msgs.push({ base, tok, id, text }); return { ok: true }; },
+    notifier: {},
+    now: () => NOW,
+    repoRoot: "/repo",
+  });
+  const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.equal(res.shipped, 1);
+  assert.equal(msgs.length, 1);
+  assert.deepEqual(msgs[0], { base: "b", tok: "A", id: "r1", text: "Your post is live on Facebook + Instagram. Thanks for sending it our way!" });
+});
+
+test("makeShipper: failed publish posts NO client message", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz({ postThrows: true });
+  const msgs = [];
+  const shipper = makeShipper({
+    fetchIntegrations: async () => INTEGRATIONS,
+    postiz: pz,
+    apiUpdate: api.apiUpdate,
+    apiMessage: async (...a) => { msgs.push(a); return { ok: true }; },
+    notifier: {},
+    now: () => NOW,
+    repoRoot: "/repo",
+  });
+  await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.equal(msgs.length, 0, "the client only hears about SUCCESSFUL publishes");
+});
+
+test("makeShipper: a throwing apiMessage is best-effort — the ship still counts and nothing crashes", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz();
+  const shipper = makeShipper({
+    fetchIntegrations: async () => INTEGRATIONS,
+    postiz: pz,
+    apiUpdate: api.apiUpdate,
+    apiMessage: async () => { throw new Error("backend hiccup"); },
+    notifier: {},
+    now: () => NOW,
+    repoRoot: "/repo",
+  });
+  const res = await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.equal(res.shipped, 1);
+  const done = api.patches.find((p) => p.patch.action === "done");
+  assert.ok(done, "done writeback unaffected by the failed thread message");
+});
+
+test("makeShipper: partial publish messages only the channels that actually went out", async () => {
+  const api = fakeApi();
+  const pz = fakePostiz({ failOn: 2 }); // FB ok, IG fails
+  const msgs = [];
+  const shipper = makeShipper({
+    fetchIntegrations: async () => INTEGRATIONS,
+    postiz: pz,
+    apiUpdate: api.apiUpdate,
+    apiMessage: async (b, t, id, text) => { msgs.push(text); return { ok: true }; },
+    notifier: {},
+    now: () => NOW,
+    repoRoot: "/repo",
+  });
+  await shipper({ apiBase: "b", adminToken: "A", ships: [REQ], clients: [CLIENT] });
+  assert.deepEqual(msgs, ["Your post is live on Facebook. Thanks for sending it our way!"]);
+});
+
+// --- apiMessage (writeback): admin postMessage against the backend contract ---
+
+test("apiMessage POSTs {admin, action:'postMessage', id, text} as JSON", async () => {
+  const orig = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    return { status: 200, json: async () => ({ ok: true }) };
+  };
+  try {
+    const res = await apiMessage("https://api.example/exec", "ADMIN", "req_1", "Your post is live on Facebook. Thanks for sending it our way!");
+    assert.equal(res.ok, true);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].url, "https://api.example/exec");
+    assert.equal(calls[0].opts.method, "POST");
+    assert.equal(calls[0].opts.headers["content-type"], "application/json");
+    assert.deepEqual(JSON.parse(calls[0].opts.body), {
+      admin: "ADMIN",
+      action: "postMessage",
+      id: "req_1",
+      text: "Your post is live on Facebook. Thanks for sending it our way!",
+    });
+  } finally {
+    globalThis.fetch = orig;
+  }
 });
 
 test("makeShipper: retries the done writeback once if it fails (no wedge, still shipped)", async () => {

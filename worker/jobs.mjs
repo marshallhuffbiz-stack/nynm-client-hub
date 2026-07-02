@@ -22,9 +22,31 @@ export function detectJobs(requests = [], caps = { draft: 5, ship: 5 }) {
 // brand fidelity (and website ships can never see siteFolder). Joining here also
 // attaches the promoted event's start/end times so an event promo can actually say
 // "7–10 PM" instead of hallucinating.
-export function enrichJobs(rows = [], clients = [], events = []) {
+// Stages where a request is still "in play" pre-approval — a sibling here may be a
+// follow-up to the job being drafted ("adding on to this…"), so the drafter must see
+// it or it drafts duplicates. "approved"/done/error are past the review gate and are
+// deliberately excluded (folding an approved creative would clobber reviewed work).
+const OPEN_STAGES = ["submitted", "queued", "changes", "drafting", "ready"];
+
+// Compact view of a request for the drain brief — just enough to spot "same ask".
+function openRequestBrief(r) {
+  return {
+    id: r.id,
+    createdAt: r.createdAt || "",
+    type: r.type || "",
+    title: r.title || "",
+    description: String(r.description || "").slice(0, 200),
+    stage: r.stage,
+  };
+}
+
+export function enrichJobs(rows = [], clients = [], events = [], allRequests) {
   const byClient = new Map((clients || []).map((c) => [c.clientId, c]));
   const byEvent = new Map((events || []).map((e) => [e.eventId, e]));
+  // Related-request awareness: default to the batch itself so two duplicate asks
+  // queued together (the real incident) always see each other even when the caller
+  // doesn't pass the full request list.
+  const pool = Array.isArray(allRequests) ? allRequests : rows || [];
   return (rows || []).map((r) => {
     const c = byClient.get(r.clientId) || {};
     const job = {
@@ -32,6 +54,9 @@ export function enrichJobs(rows = [], clients = [], events = []) {
       brandSlug: r.brandSlug || c.brandSlug || "",
       siteFolder: r.siteFolder || c.siteFolder || "",
       clientName: c.name || r.clientId || "",
+      otherOpenRequests: pool
+        .filter((o) => o && o.id !== r.id && o.clientId === r.clientId && OPEN_STAGES.includes(o.stage))
+        .map(openRequestBrief),
     };
     const ev = r.eventId ? byEvent.get(r.eventId) : null;
     if (ev) {
@@ -45,6 +70,13 @@ export function enrichJobs(rows = [], clients = [], events = []) {
     }
     return job;
   });
+}
+
+// A draft whose summary starts with "Folded into" is the placeholder wb.mjs writes
+// when the drain merges a follow-up request into its primary — it needs no review,
+// so the loud "draft ready" push must stay silent for it. Anything else notifies.
+export function shouldNotifyReady(draft) {
+  return !(draft && /^Folded into/.test(String(draft.summary || "")));
 }
 
 // True if the daily digest is due: now is past `hour` today and we haven't sent
