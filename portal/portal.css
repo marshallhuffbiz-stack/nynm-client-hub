@@ -20,7 +20,24 @@
 }
 
 /* Attachment thumbnail strip on the request form. */
-.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 8px; }
+
+/* Remove-photo button: small x pinned to the thumb's top-right corner. The
+   ::before layer expands the tap target to ~44pt without growing the visual. */
+.thumbs .thumb { position: relative; overflow: visible; }
+.thumb-remove {
+  position: absolute; top: -7px; right: -7px; z-index: 2;
+  width: 22px; height: 22px; padding: 0; border: none; cursor: pointer;
+  border-radius: 50%; background: var(--toast-bg, rgba(30, 30, 34, 0.92)); color: #ffffff;
+  font-size: 15px; line-height: 22px; font-weight: 600; text-align: center;
+  box-shadow: var(--depth-1), 0 0 0 2px var(--card);
+  appearance: none; -webkit-appearance: none;
+}
+.thumb-remove::before { content: ""; position: absolute; inset: -11px; border-radius: 50%; }
+.thumb-remove:active { transform: scale(0.92); }
+/* keep the image's rounded corners while letting the x overhang */
+.thumbs .thumb img, .thumbs .thumb .small { border-radius: inherit; }
+.thumbs .thumb img { border-radius: 13px; }
 
 /* ===================== iOS segmented control (request type picker) ===================== */
 .seg {

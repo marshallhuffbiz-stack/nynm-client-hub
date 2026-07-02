@@ -62,6 +62,13 @@
       <p class="muted small">The portal link you used has expired or isn't recognized. Ask your NYNM contact for a fresh link.</p>
     </div>
 
+    <!-- Offline / can't-reach-server state (network problem, NOT a bad link) -->
+    <div id="view-offline" class="card hidden">
+      <h2>Can't reach the server</h2>
+      <p class="muted small">Your link is fine. Check your connection and try again.</p>
+      <button id="retry-btn" type="button" class="btn primary block" style="margin-top:12px">Retry</button>
+    </div>
+
     <!-- PIN state -->
     <form id="view-pin" class="card hidden" autocomplete="off">
       <h2>Enter your PIN</h2>
