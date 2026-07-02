@@ -51,6 +51,17 @@ var BOOL_FIELDS = {
   Events: ["promoted"]
 };
 
+// [V9] Per-tab: columns that MUST stay plain text in the cell. Google Sheets
+// auto-coerces "16:00" into a time cell (read back as a Date on the Sheets epoch,
+// 1899-12-30) and "2026-07-04" into a date cell — the portal's formatter expects
+// "HH:MM"/"YYYY-MM-DD" strings and silently showed nothing. These columns are
+// written apostrophe-prefixed (forces text) and normalized back to strings on read.
+var TEXT_FIELDS = {
+  Clients: [],
+  Requests: [],
+  Events: ["date", "time", "endTime"]
+};
+
 // Mirror of core/model.mjs REQUEST_TYPES.
 var REQUEST_TYPES = ["post", "website", "design", "event-promo"];
 
@@ -154,7 +165,55 @@ function getOrCreateSheet_(name, cols) {
   if (!headerOk) {
     s.getRange(1, 1, 1, cols.length).setValues([cols]);
     s.setFrozenRows(1);
+    // [V9] While self-migrating headers, pin the time/date columns to plain-text
+    // format so Sheets never coerces "16:00" / "2026-07-04" into time/date cells.
+    var textCols = TEXT_FIELDS[name] || [];
+    for (var t = 0; t < textCols.length; t++) {
+      var ci = cols.indexOf(textCols[t]);
+      if (ci >= 0) s.getRange(1, ci + 1, s.getMaxRows(), 1).setNumberFormat("@");
+    }
   }
+  return s;
+}
+
+// [V9] Spreadsheet timezone (cached) — time/date cells read back as Date objects
+// carry wall-clock meaning in the SPREADSHEET's timezone, not the script's.
+var SHEET_TZ_CACHE_ = null;
+function sheetTz_() {
+  if (!SHEET_TZ_CACHE_) {
+    SHEET_TZ_CACHE_ = ss_().getSpreadsheetTimeZone() || Session.getScriptTimeZone() || "Etc/UTC";
+  }
+  return SHEET_TZ_CACHE_;
+}
+
+// [V9] Normalize a time-ish cell back to "HH:MM" (24h, zero-padded).
+// Sheets coerces a "16:00" string into a time cell; GAS reads it back as a Date
+// on the Sheets epoch (1899-12-30) — the portal's formatter expects "HH:MM" and
+// silently showed nothing. Mirrored by a pure-JS copy in test/contract.test.mjs.
+function normalizeTimeCell_(raw) {
+  if (raw === null || raw === undefined || raw === "") return "";
+  if (Object.prototype.toString.call(raw) === "[object Date]") {
+    return Utilities.formatDate(raw, sheetTz_(), "HH:mm");
+  }
+  var s = String(raw).trim();
+  // Real Sheets never returns the text-forcing apostrophe, but defensively strip
+  // one (harnesses / CSV round-trips can surface it as a literal).
+  if (s.charAt(0) === "'") s = s.slice(1);
+  // "16:00:00" -> "16:00"; "9:30" -> "09:30"; already-good "HH:MM" passes through.
+  var m = /^(\d{1,2}):(\d{2})(?::\d{2}(?:\.\d+)?)?$/.exec(s);
+  if (m) return ("0" + m[1]).slice(-2) + ":" + m[2];
+  return s;
+}
+
+// [V9] Normalize a date-ish cell back to "YYYY-MM-DD" (Sheets coerces the string
+// to a date cell; GAS reads a Date back). Mirrored in test/contract.test.mjs.
+function normalizeDateCell_(raw) {
+  if (raw === null || raw === undefined || raw === "") return "";
+  if (Object.prototype.toString.call(raw) === "[object Date]") {
+    return Utilities.formatDate(raw, sheetTz_(), "yyyy-MM-dd");
+  }
+  var s = String(raw).trim();
+  if (s.charAt(0) === "'") s = s.slice(1);
   return s;
 }
 
@@ -178,6 +237,18 @@ function decodeCell_(sheetName, field, raw) {
     }
     try { return JSON.parse(String(raw)); } catch (e) { return null; }
   }
+  // [V9] Time/date columns: undo Sheets' cell coercion so the API always serves
+  // "HH:MM" / "YYYY-MM-DD" strings (legacy rows written before the text-format
+  // guard still hold real Date cells).
+  if (TEXT_FIELDS[sheetName].indexOf(field) >= 0) {
+    return (field === "date") ? normalizeDateCell_(raw) : normalizeTimeCell_(raw);
+  }
+  // [V9] Belt-and-braces: any OTHER scalar column Sheets coerced into a datetime
+  // (e.g. an ISO createdAt/updatedAt) goes back over the wire as an ISO string,
+  // never a serialized Date.
+  if (Object.prototype.toString.call(raw) === "[object Date]") {
+    return raw.toISOString();
+  }
   // Plain scalar/string field. Keep "" as "".
   return raw === null || raw === undefined ? "" : raw;
 }
@@ -190,6 +261,15 @@ function encodeCell_(sheetName, field, val) {
   if (JSON_FIELDS[sheetName].indexOf(field) >= 0) {
     if (val === undefined) val = (field === "draft" ? null : (field === "meta" ? {} : []));
     return JSON.stringify(val === undefined ? null : val);
+  }
+  // [V9] Belt-and-braces on WRITE: force time/date columns in as text. A leading
+  // apostrophe is Sheets' text-forcing prefix (honored by setValues/appendRow just
+  // like UI typing; it is NOT part of the stored value), so "16:00" stays the
+  // string "16:00" instead of becoming a time cell. Rewrites of legacy rows
+  // self-heal them to text.
+  if (TEXT_FIELDS[sheetName].indexOf(field) >= 0) {
+    var sv = String(val === null || val === undefined ? "" : val).trim();
+    return sv === "" ? "" : "'" + sv;
   }
   if (val === null || val === undefined) return "";
   return val;
@@ -729,6 +809,17 @@ function handleUpdateRequest_(body) {
   var patch = {};
   var k;
   for (k in (body.patch || {})) { if (body.patch.hasOwnProperty(k)) patch[k] = body.patch[k]; }
+
+  // [V9] Identity fields are IMMUTABLE through patches. mergePatch_ is a blind
+  // overlay, so a stray patch carrying id/clientId/createdAt (e.g. a caller echoing
+  // a whole fetched row back as the patch, or a blank clientId) used to re-key or
+  // de-tenant the row — and doGet filters requests by clientId, so the request
+  // silently vanished from its client's portal. __row is internal bookkeeping and
+  // must never come from the wire either. Mirrors mock-server/server.mjs.
+  delete patch.id;
+  delete patch.clientId;
+  delete patch.createdAt;
+  delete patch.__row;
 
   if (patch.action) {
     var nxt;

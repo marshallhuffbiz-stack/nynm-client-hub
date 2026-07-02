@@ -190,6 +190,15 @@ export function createApp({ storePath, uploadsDir }) {
               if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
               const cur = data.requests[idx];
               const patch = { ...(body.patch || {}) };
+              // [V9] Identity fields are IMMUTABLE through patches. mergePatch is a
+              // blind overlay, so a stray patch carrying id/clientId/createdAt (e.g. a
+              // caller echoing a whole fetched row back as the patch, or a blank
+              // clientId) used to re-key or de-tenant the row — and the client GET
+              // filters on clientId, so the request silently vanished from its
+              // client's portal. Mirrors handleUpdateRequest_ in apps-script/Code.gs.
+              delete patch.id;
+              delete patch.clientId;
+              delete patch.createdAt;
               if (patch.action) {
                 if (patch.action === "requeue") {
                   // First-class retry: only errored or stuck-shipping rows may requeue.
