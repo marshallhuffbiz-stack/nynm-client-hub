@@ -5,18 +5,19 @@
 //   4. sends a daily digest when due.
 // runOnce() is dependency-injected so it can be tested without spawning Claude.
 import { readFile, writeFile, mkdir, statfs } from "node:fs/promises";
-import { existsSync, readFileSync, unlinkSync } from "node:fs";
+import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { detectJobs, shouldRunDigest, detectOrphans, planOrphanRecovery, enrichJobs } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
 import { apiFetchAll, apiUpdate } from "./writeback.mjs";
-import { makeNotifier } from "./notify.mjs";
+import { makeNotifier, macNotify, pushNotify } from "./notify.mjs";
 import { makeShipper, makePostizClient } from "./publish.mjs";
 import { makeAutoEvents } from "./auto-events.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
+import { onTickOutcome, repairCommand } from "./selfheal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -248,6 +249,37 @@ async function stateGetSet() {
 }
 
 // CLI entry (launchd runs this). pathToFileURL handles paths with spaces/encoding.
+// Track consecutive first-fetch failures across ticks (state survives because each
+// launchd tick is a fresh process) and self-repair the macOS background-network
+// wedge by relaunching our own job. See selfheal.mjs for the decision logic.
+async function recordTickOutcome({ fetchOk }) {
+  try {
+    const stateFile = join(HERE, ".selfheal.json");
+    let state = null;
+    try { state = JSON.parse(readFileSync(stateFile, "utf8")); } catch {}
+    const { next, repair } = onTickOutcome(state, { fetchOk, now: Date.now() });
+    if (fetchOk && state && state.lastRepairAt && !state.recoveredNotified) {
+      next.recoveredNotified = true;
+      try {
+        const cfg = JSON.parse(readFileSync(join(HERE, "config.json"), "utf8"));
+        await pushNotify(cfg.push, "Relay worker recovered", "The worker lost network for a stretch, relaunched itself, and is draining the queue again. Anything submitted meanwhile is being picked up now.");
+      } catch { /* best-effort */ }
+    }
+    if (repair) {
+      console.error(new Date().toISOString(), "self-heal: consecutive fetch failures hit the threshold; relaunching the worker job (macOS background-network wedge)");
+      await macNotify("Relay worker self-healing", "Network calls failed for several minutes. Relaunching the worker job now.");
+      const [bin, args] = repairCommand({
+        uid: process.getuid(),
+        plistPath: join(process.env.HOME || "/Users/MarshallHuff", "Library/LaunchAgents/com.nynm.client-worker.plist"),
+      });
+      const child = spawn(bin, args, { detached: true, stdio: "ignore" });
+      child.unref();
+      delete next.recoveredNotified;
+    }
+    writeFileSync(stateFile, JSON.stringify(next));
+  } catch { /* self-heal must never break a tick */ }
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const lock = join(HERE, ".lock");
   let weWroteLock = false;
@@ -319,8 +351,16 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       maxRequeues: cfg.maxRequeues ?? 3,
     });
     console.log(new Date().toISOString(), "drain:", JSON.stringify(res));
+    await recordTickOutcome({ fetchOk: true });
   } catch (e) {
-    console.error("poller error:", e.message);
+    console.error(new Date().toISOString(), "poller error:", e.message);
+    // Self-heal the macOS background-network wedge: after sleep/wake, every
+    // launchd tick can fail its first fetch ("fetch failed") until the JOB is
+    // relaunched (proven 2026-07-02 — 4h dark). Count consecutive fetch
+    // failures; at threshold, notify and relaunch our own launchd job.
+    if (/^fetch all failed: network error/.test(e.message)) {
+      await recordTickOutcome({ fetchOk: false });
+    }
   } finally {
     // Only remove the lock if THIS process wrote it — an early throw (e.g. bad
     // config) must never delete a lock held by another live drain.
