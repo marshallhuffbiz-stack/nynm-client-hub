@@ -11,7 +11,16 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const API_PORT = Number(process.env.API_PORT || 8787);
 const WEB_PORT = Number(process.env.WEB_PORT || 8080);
 
-createApp({ storePath: join(root, "data", "store.json") }).listen(API_PORT, "127.0.0.1", () =>
+// First run: seed the store so the printed dev links work immediately.
+// (The API loads the store at boot, so seeding must happen before createApp.)
+const storePath = join(root, "data", "store.json");
+if (!existsSync(storePath)) {
+  const { spawnSync } = await import("node:child_process");
+  const res = spawnSync(process.execPath, [join(root, "scripts", "seed.mjs")], { stdio: "inherit" });
+  if (res.status !== 0) console.warn("Seed failed; dev tokens may not work until you run: npm run seed");
+}
+
+createApp({ storePath }).listen(API_PORT, "127.0.0.1", () =>
   console.log(`API  http://127.0.0.1:${API_PORT}`)
 );
 
