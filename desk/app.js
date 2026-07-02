@@ -14,6 +14,12 @@ const TRASH_SVG =
   '<path d="M4 7h16"/><path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>' +
   '<path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13"/><path d="M10 11v6M14 11v6"/></svg>';
 
+// Chevron glyph for the expand/collapse affordance on request cards.
+const CHEVRON_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M6 9l6 6 6-6"/></svg>';
+
 // localStorage, but never throw (private mode / blocked storage).
 function safeLocalStorage() {
   try { return window.localStorage; } catch { return null; }
@@ -206,6 +212,24 @@ function stageTier(s) {
   if (NEEDS_YOU_STAGES.has(s)) return 0;
   if (s === "done") return 2;
   return 1;
+}
+
+// Cards render compact (head + summary) with the heavy action surface collapsed.
+// Needs-you stages that carry a one-tap action inside (Approve / Retry / change
+// note) start expanded so nothing gets slower; fresh submissions stay compact so
+// a morning triage of five requests is a scan, not a scroll. Derived from
+// NEEDS_YOU_STAGES minus "submitted".
+const AUTO_EXPAND_STAGES = new Set([...NEEDS_YOU_STAGES].filter((s) => s !== "submitted"));
+
+// Marshall's explicit open/closed choices, keyed by request id, remembered with
+// the stage they were made in. Survives poll re-renders; when the stage moves on
+// (e.g. drafting -> ready) the stage default takes over again.
+const cardExpandChoice = new Map();
+function isCardExpanded(r) {
+  const c = cardExpandChoice.get(r.id);
+  if (c && c.stage === r.stage) return c.expanded;
+  if (c) cardExpandChoice.delete(r.id); // stale: stage changed since the choice
+  return AUTO_EXPAND_STAGES.has(r.stage);
 }
 
 // "2 days" / "5 hr" / "12 min" elapsed since the given time; "" when under a
@@ -428,26 +452,25 @@ $("#tabs").addEventListener("click", (e) => {
 // REQUESTS view
 // ===================================================================
 function renderFilters() {
-  // stage chips, each carrying a live count scoped by the client filter
+  // One horizontally scrollable rail: stage chips, a hairline divider, then
+  // client chips (when more than one client exists). Saves a full row of
+  // viewport on the phone vs the old two wrapped rows.
   const inClient = (r) => (state.filterClient === "all" ? true : r.clientId === state.filterClient);
-  const sc = $("#stage-chips");
-  sc.replaceChildren(
-    ...STAGE_FILTERS.map((f) => {
-      const n = f.stages ? state.requests.filter((r) => f.stages.includes(r.stage) && inClient(r)).length : 0;
-      return el("button", {
-        type: "button",
-        class: "chip sm" + (state.filterStage === f.key ? " active" : ""),
-        onclick: () => { state.filterStage = f.key; saveUiState(); renderRequests(); },
-      }, f.stages && n ? `${f.label} (${n})` : f.label);
-    })
-  );
+  const rail = $("#filter-chips");
+  const keepScroll = rail.scrollLeft;
 
-  // client chips (only when more than one client exists)
-  const cc = $("#client-chips");
-  if (state.clients.length <= 1) {
-    cc.replaceChildren();
-  } else {
-    const chips = [
+  const chips = STAGE_FILTERS.map((f) => {
+    const n = f.stages ? state.requests.filter((r) => f.stages.includes(r.stage) && inClient(r)).length : 0;
+    return el("button", {
+      type: "button",
+      class: "chip sm" + (state.filterStage === f.key ? " active" : ""),
+      onclick: () => { state.filterStage = f.key; saveUiState(); renderRequests(); },
+    }, f.stages && n ? `${f.label} (${n})` : f.label);
+  });
+
+  if (state.clients.length > 1) {
+    chips.push(el("span", { class: "chip-sep", "aria-hidden": "true" }));
+    chips.push(
       el("button", {
         type: "button",
         class: "chip sm" + (state.filterClient === "all" ? " active" : ""),
@@ -459,10 +482,12 @@ function renderFilters() {
           class: "chip sm" + (state.filterClient === c.clientId ? " active" : ""),
           onclick: () => { state.filterClient = c.clientId; saveUiState(); renderRequests(); },
         }, c.name)
-      ),
-    ];
-    cc.replaceChildren(...chips);
+      )
+    );
   }
+
+  rail.replaceChildren(...chips);
+  rail.scrollLeft = keepScroll; // don't jump the rail on re-render
 }
 
 function filteredRequests() {
@@ -522,9 +547,10 @@ function requestCard(r) {
   const sm = stageMeta(r.stage);
   const cl = state.clientById[r.clientId] || {};
   const isDone = r.stage === "done";
+  const expanded = isCardExpanded(r);
 
   const card = el("div", {
-    class: "card" + (isDone ? " is-done" : ""),
+    class: "card req-card" + (isDone ? " is-done" : "") + (expanded ? " is-open" : ""),
     "data-req-id": r.id,
     "data-updated-at": r.updatedAt || "",
   });
@@ -538,7 +564,19 @@ function requestCard(r) {
     (NEEDS_YOU_STAGES.has(r.stage) || r.stage === "drafting") &&
     !Number.isNaN(stageT) && (Date.now() - stageT) > STALE_AFTER_MS;
 
-  // header
+  // Expand/collapse control: a real 44pt button for a11y; the whole head is the
+  // tap target on top of it.
+  const bodyId = `req-body-${r.id}`;
+  const expandBtn = el("button", {
+    type: "button",
+    class: "req-expand",
+    "aria-expanded": expanded ? "true" : "false",
+    "aria-controls": bodyId,
+    "aria-label": expanded ? "Hide details" : "Show details",
+    html: CHEVRON_SVG,
+  });
+
+  // header — tapping it toggles the heavy body (except the delete control)
   const head = el("div", { class: "req-head" },
     brandAvatar(cl, r.clientId),
     el("div", { class: "req-headtext" },
@@ -550,18 +588,41 @@ function requestCard(r) {
         stageAge ? el("span", { class: "req-stagetime" + (isStale ? " stale" : "") }, `in ${sm.label} for ${stageAge}`) : false
       )
     ),
-    deleteRequestButton(r)
+    deleteRequestButton(r),
+    expandBtn
   );
+  head.addEventListener("click", (e) => {
+    if (e.target.closest(".req-del")) return;
+    const open = !card.classList.contains("is-open");
+    // Animate only user-initiated opens. Bodies rendered already-open must never
+    // depend on an animation to become visible (background tabs freeze CSS
+    // animations at frame 0, leaving content stuck at opacity 0).
+    card.classList.toggle("do-anim", open);
+    card.classList.toggle("is-open", open);
+    expandBtn.setAttribute("aria-expanded", open ? "true" : "false");
+    expandBtn.setAttribute("aria-label", open ? "Hide details" : "Show details");
+    cardExpandChoice.set(r.id, { stage: r.stage, expanded: open });
+  });
   card.append(head);
 
   if (!isDone) {
     if (r.title) card.append(el("div", { class: "req-title" }, r.title));
     if (r.description) card.append(el("div", { class: "req-desc" }, r.description));
+    // One-line staged-draft peek so a collapsed ready card still shows what
+    // Claude made. Hidden (via CSS) once the card is open.
+    const d = r.draft || {};
+    const peek = d.caption || d.preview || d.summary || "";
+    if (peek) card.append(el("div", { class: "req-peek" }, `Draft: ${peek}`));
+  }
 
+  // Everything heavy lives in the collapsible body.
+  const body = el("div", { class: "req-body", id: bodyId });
+
+  if (!isDone) {
     // attachments
     const atts = Array.isArray(r.attachments) ? r.attachments.filter((a) => a && a.url) : [];
     if (atts.length) {
-      card.append(
+      body.append(
         el("div", { class: "req-thumbs" },
           ...atts.map((a) => {
             if ((a.mime || "").startsWith("audio/")) {
@@ -578,8 +639,9 @@ function requestCard(r) {
     }
   }
 
-  card.append(actionArea(r));
-  card.append(threadSection(r));
+  body.append(actionArea(r));
+  body.append(threadSection(r));
+  card.append(body);
   return card;
 }
 
