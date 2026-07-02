@@ -18,7 +18,7 @@
   appearance: none; -webkit-appearance: none; border: none; background: transparent;
   color: var(--label-2);
   font-family: var(--font); font-weight: 500; font-size: 14px; letter-spacing: -0.2px;
-  padding: 6px 8px; min-height: 40px; border-radius: 8px; cursor: pointer;
+  padding: 6px 8px; min-height: 44px; border-radius: 8px; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease),
               box-shadow var(--dur-fast) var(--ease);
@@ -42,6 +42,8 @@
 /* ===================== Filters ===================== */
 .filters { margin-bottom: 14px; }
 .filters .row + .row { margin-top: 8px; }
+/* the most-tapped controls on the phone; 44pt minimum tap target */
+.filters .chip.sm { min-height: 44px; }
 
 /* ===================== Request card ===================== */
 .req-head { display: flex; align-items: flex-start; gap: 12px; }
@@ -49,6 +51,9 @@
 .req-headtext { flex: 1; min-width: 0; }
 .req-client { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); line-height: 1.22; }
 .req-when { color: var(--label-2); font-size: 13px; font-variant-numeric: tabular-nums; }
+/* time-in-stage readout; turns orange when a needs-you/drafting item sits >24h */
+.req-stagetime { color: var(--label-3); font-size: 13px; font-variant-numeric: tabular-nums; }
+.req-stagetime.stale { color: var(--orange); font-weight: 600; }
 .req-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
 .req-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; margin: 14px 0 4px; }
 .req-desc { color: var(--label); font-size: 16px; letter-spacing: -0.2px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
@@ -57,7 +62,7 @@
 /* per-request delete control — quiet by default, destructive red on hover/focus */
 .req-del {
   margin-left: auto; align-self: flex-start; flex: none;
-  width: 40px; height: 40px; border-radius: var(--r-button-sm);
+  width: 44px; height: 44px; border-radius: var(--r-button-sm);
   display: grid; place-items: center; cursor: pointer;
   border: none; background: transparent; color: var(--label-3);
   transition: color var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease), transform 120ms var(--ease);
@@ -97,6 +102,15 @@
   margin-top: 12px; line-height: 1.4;
 }
 .notebox strong { font-weight: 600; color: var(--orange); }
+/* error callout pops red: a failed publish is the one state that costs money */
+.notebox.err { background: var(--red-fill); }
+.notebox.err strong { color: var(--red); }
+
+/* inline change-note editor on a ready card (replaces window.prompt) */
+.changenote { margin-top: 14px; display: grid; gap: 6px; }
+.changenote.hidden { display: none; }
+.changenote textarea { min-height: 84px; }
+.changenote label { margin-bottom: 0; }
 
 /* ===================== Staged-draft review (recessed inset, not a nested card) ===================== */
 .draft {
@@ -135,6 +149,9 @@
   color: var(--label-2); background: var(--bg); border-color: transparent;
 }
 .linkrow .btn { flex: none; }
+
+/* small buttons still get a 44pt minimum tap target on the desk */
+.btn.sm { min-height: 44px; }
 
 /* ===================== Misc ===================== */
 code {
