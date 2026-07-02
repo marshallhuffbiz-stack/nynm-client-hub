@@ -12,9 +12,46 @@ import {
   publicClient,
   nextStage,
   mergePatch,
+  planRequeue,
 } from "../core/model.mjs";
 
 const now = () => new Date().toISOString();
+
+// "19:30" -> "7:30 PM" (promo descriptions read like copy, not timestamps).
+function fmt12(hhmm) {
+  const m = /^(\d{2}):(\d{2})$/.exec(String(hhmm || ""));
+  if (!m) return "";
+  const h = Number(m[1]);
+  return `${h % 12 || 12}:${m[2]} ${h >= 12 ? "PM" : "AM"}`;
+}
+
+// Server-side deep-merge for request `meta` (mirrors apps-script/Code.gs mergeMeta_).
+// A writeback that patches meta must MERGE, not clobber: workers send meta computed
+// from a fetch minutes old, and a wholesale overlay silently dropped thread messages,
+// the activity entry the server just appended, notified flags, and idempotency keys.
+// Rules: thread/activity arrays union-append (dedupe identical entries, sort by `at`);
+// nested plain objects (e.g. run) shallow-merge with patch winning per key;
+// scalars overwrite.
+function mergeMeta(cur = {}, patch = {}) {
+  const out = { ...cur };
+  for (const [k, v] of Object.entries(patch)) {
+    const curV = out[k];
+    if ((k === "thread" || k === "activity") && Array.isArray(v) && Array.isArray(curV)) {
+      const seen = new Set(curV.map((e) => JSON.stringify(e)));
+      out[k] = curV
+        .concat(v.filter((e) => !seen.has(JSON.stringify(e))))
+        .sort((a, b) => String((a && a.at) || "").localeCompare(String((b && b.at) || "")));
+    } else if (
+      v && typeof v === "object" && !Array.isArray(v) &&
+      curV && typeof curV === "object" && !Array.isArray(curV)
+    ) {
+      out[k] = { ...curV, ...v };
+    } else {
+      out[k] = v;
+    }
+  }
+  return out;
+}
 
 function send(res, code, obj) {
   res.writeHead(code, {
@@ -154,10 +191,22 @@ export function createApp({ storePath, uploadsDir }) {
               const cur = data.requests[idx];
               const patch = { ...(body.patch || {}) };
               if (patch.action) {
-                try {
-                  patch.stage = nextStage(cur.stage, patch.action);
-                } catch (e) {
-                  return { code: 409, obj: { ok: false, error: e.message } };
+                if (patch.action === "requeue") {
+                  // First-class retry: only errored or stuck-shipping rows may requeue.
+                  // planRequeue decides the safe target — a publish-phase failure with
+                  // an approved draft goes back to "approved" KEEPING the draft (no
+                  // re-drafting run burned); anything else re-queues for a fresh draft.
+                  if (cur.stage !== "error" && cur.stage !== "shipping")
+                    return { code: 409, obj: { ok: false, error: `illegal transition: ${cur.stage} --requeue-->` } };
+                  const plan = planRequeue(cur);
+                  patch.stage = plan.stage;
+                  if (Object.prototype.hasOwnProperty.call(plan, "draft")) patch.draft = plan.draft;
+                } else {
+                  try {
+                    patch.stage = nextStage(cur.stage, patch.action);
+                  } catch (e) {
+                    return { code: 409, obj: { ok: false, error: e.message } };
+                  }
                 }
                 const act = patch.action;
                 delete patch.action;
@@ -167,8 +216,14 @@ export function createApp({ storePath, uploadsDir }) {
                 // long-lived request that re-drafts later starts fresh instead of being
                 // pre-charged toward the give-up cap.
                 if (act === "ready") cur.meta.run = { ...(cur.meta.run || {}), requeues: 0, error: "" };
+                // A requeue clears the stale error so the Desk stops showing it.
+                if (act === "requeue") cur.meta.run = { ...(cur.meta.run || {}), error: "" };
               }
               delete patch._note;
+              // Deep-merge (never clobber) any meta carried by the patch — preserves
+              // thread/activity/notified/clientRequestId written since the caller's fetch.
+              if (patch.meta && typeof patch.meta === "object" && !Array.isArray(patch.meta))
+                patch.meta = mergeMeta(cur.meta || {}, patch.meta);
               data.requests[idx] = mergePatch(cur, patch, now());
               return { code: 200, obj: { ok: true, request: data.requests[idx] } };
             }
@@ -195,13 +250,19 @@ export function createApp({ storePath, uploadsDir }) {
             case "promoteEvent": {
               const ev = data.events.find((e) => e.eventId === body.eventId);
               if (!ev) return { code: 404, obj: { ok: false, error: "event not found" } };
+              // Carry the start/end times the client entered into the promo brief —
+              // the whole point of collecting them is a post that says "7–10 PM".
+              let when = "";
+              if (ev.time && ev.endTime) when = `, ${fmt12(ev.time)}–${fmt12(ev.endTime)}`;
+              else if (ev.time) when = `, starting ${fmt12(ev.time)}`;
+              else if (ev.endTime) when = `, until ${fmt12(ev.endTime)}`;
               const id = genId("req");
               data.requests.push({
                 id,
                 clientId: ev.clientId,
                 type: "event-promo",
                 title: `Promote: ${ev.title}`,
-                description: `${ev.title} on ${ev.date}. ${ev.description || ""}`.trim(),
+                description: `${ev.title} on ${ev.date}${when}. ${ev.description || ""}`.trim(),
                 attachments: [],
                 eventId: ev.eventId,
                 stage: "submitted",
