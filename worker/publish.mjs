@@ -8,11 +8,13 @@
 import { resolve as resolvePath, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
-import { homedir } from "node:os";
+import { homedir, hostname } from "node:os";
 import { apiMessage as defaultApiMessage } from "./writeback.mjs";
+import { noteFor } from "../shared/history.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
+const HOST = hostname();
 const isRemote = (u) => typeof u === "string" && /^(https?:|data:)/i.test(u);
 
 // Channel publishing order — Facebook before Instagram so the stagger fires FB
@@ -159,7 +161,7 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, apiMessage =
       // Claim the row (approved -> shipping) BEFORE publishing. If this writeback
       // does not commit, do NOT publish: leave it "approved" to retry next tick,
       // so a failed claim can never lead to a double-post.
-      const claim = await apiUpdate(apiBase, adminToken, req.id, { action: "ship" });
+      const claim = await apiUpdate(apiBase, adminToken, req.id, { action: "ship", _note: noteFor("ship", { host: HOST }) });
       if (!claim || claim.ok !== true) {
         skipped += 1;
         continue;
@@ -180,6 +182,7 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, apiMessage =
         const partial = (result.failures || []).filter(Boolean);
         const donePatch = {
           action: "done",
+          _note: `Published to ${(result.channels || []).join(", ") || "social"} (${HOST})`,
           meta: { ...baseMeta, run: { status: partial.length ? "shipped-partial" : "shipped", finishedAt: tickNow.toISOString(), channels: result.channels, postIds: result.postIds, failures: partial } },
         };
         // The post is already scheduled in Postiz here; we only need the row to read
@@ -206,6 +209,7 @@ export function makeShipper({ fetchIntegrations, postiz, apiUpdate, apiMessage =
         // core/model.mjs planRequeue.
         await apiUpdate(apiBase, adminToken, req.id, {
           action: "error",
+          _note: noteFor("error", { message: result.error }),
           meta: { ...baseMeta, run: { status: "error", phase: "publish", error: result.error, finishedAt: tickNow.toISOString() } },
         });
         if (notifier && notifier.notifyShipFailed) await notifier.notifyShipFailed({ req, error: result.error });

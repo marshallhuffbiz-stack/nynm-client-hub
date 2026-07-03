@@ -8,10 +8,12 @@ import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, dirname, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
+import { hostname } from "node:os";
 import { apiUpdate, apiUpload, apiFetchAll } from "./writeback.mjs";
 import { errorPatch } from "./wb-core.mjs";
 import { shouldNotifyReady } from "./jobs.mjs";
 import { makeNotifier } from "./notify.mjs";
+import { noteFor } from "../shared/history.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(await readFile(join(HERE, "config.json"), "utf8"));
@@ -43,23 +45,27 @@ if (!cmd || !id) {
   process.exit(2);
 }
 
+// Session history: every writeback carries a human-readable _note — the backend
+// turns it into the meta.activity entry the Desk's History view shows/searches.
+// Host is in the note so VPS work reads differently from Mac work.
+const HOST = hostname();
 let patch;
 switch (cmd) {
   case "start":
-    patch = { action: "start" };
+    patch = { action: "start", _note: noteFor("start", { host: HOST }) };
     break;
   case "ready": {
     let draft = {};
     if (arg) draft = existsSync(arg) ? JSON.parse(await readFile(arg, "utf8")) : JSON.parse(arg);
     draft = await uploadDraftImage(draft);
-    patch = { action: "ready", draft };
+    patch = { action: "ready", draft, _note: noteFor("ready", { host: HOST, draft }) };
     break;
   }
   case "ship":
-    patch = { action: "ship" };
+    patch = { action: "ship", _note: noteFor("ship", { host: HOST }) };
     break;
   case "done":
-    patch = { action: "done" };
+    patch = { action: "done", _note: noteFor("done", { host: HOST }) };
     break;
   case "error": {
     // Fetch the row first and MERGE into its current meta — a bare meta:{run} would
@@ -73,6 +79,7 @@ switch (cmd) {
       if (row && row.meta && typeof row.meta === "object") currentMeta = row.meta;
     } catch {}
     patch = errorPatch(currentMeta, arg);
+    patch._note = noteFor("error", { message: arg });
     break;
   }
   default:
