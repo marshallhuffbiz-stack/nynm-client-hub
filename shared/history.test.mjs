@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { noteFor, flattenHistory, searchHistory } from "./history.mjs";
+import { noteFor, flattenHistory, searchHistory } from "./history.js";
 
 // ---- noteFor: the _note text the worker attaches to each stage transition ----
 

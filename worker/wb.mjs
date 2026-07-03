@@ -13,7 +13,7 @@ import { apiUpdate, apiUpload, apiFetchAll } from "./writeback.mjs";
 import { errorPatch } from "./wb-core.mjs";
 import { shouldNotifyReady } from "./jobs.mjs";
 import { makeNotifier } from "./notify.mjs";
-import { noteFor } from "../shared/history.mjs";
+import { noteFor } from "../shared/history.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const cfg = JSON.parse(await readFile(join(HERE, "config.json"), "utf8"));

@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { homedir, hostname } from "node:os";
 import { apiMessage as defaultApiMessage } from "./writeback.mjs";
-import { noteFor } from "../shared/history.mjs";
+import { noteFor } from "../shared/history.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolvePath(HERE, "..");
