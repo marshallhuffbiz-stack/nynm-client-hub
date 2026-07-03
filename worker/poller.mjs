@@ -266,14 +266,22 @@ async function recordTickOutcome({ fetchOk }) {
       } catch { /* best-effort */ }
     }
     if (repair) {
-      console.error(new Date().toISOString(), "self-heal: consecutive fetch failures hit the threshold; relaunching the worker job (macOS background-network wedge)");
-      await macNotify("Relay worker self-healing", "Network calls failed for several minutes. Relaunching the worker job now.");
-      const [bin, args] = repairCommand({
-        uid: process.getuid(),
-        plistPath: join(process.env.HOME || "/Users/MarshallHuff", "Library/LaunchAgents/com.nynm.client-worker.plist"),
-      });
-      const child = spawn(bin, args, { detached: true, stdio: "ignore" });
-      child.unref();
+      if (process.platform === "darwin") {
+        console.error(new Date().toISOString(), "self-heal: consecutive fetch failures hit the threshold; relaunching the worker job (macOS background-network wedge)");
+        await macNotify("Relay worker self-healing", "Network calls failed for several minutes. Relaunching the worker job now.");
+        const [bin, args] = repairCommand({
+          uid: process.getuid(),
+          plistPath: join(process.env.HOME || "/Users/MarshallHuff", "Library/LaunchAgents/com.nynm.client-worker.plist"),
+        });
+        const child = spawn(bin, args, { detached: true, stdio: "ignore" });
+        child.unref();
+      } else {
+        // Linux/systemd: the launchctl wedge doesn't exist and the timer re-invokes a
+        // fresh process every tick anyway — nothing to relaunch. Log so a real outage
+        // (backend down, DNS broken) is visible in the journal, and let the failure
+        // counter reset via the same state write below.
+        console.error(new Date().toISOString(), "self-heal: consecutive fetch failures hit the threshold; no job relaunch needed under systemd — check network/backend if this persists");
+      }
       delete next.recoveredNotified;
     }
     writeFileSync(stateFile, JSON.stringify(next));

@@ -6,6 +6,7 @@ import { openLightbox, makeZoomable } from "../shared/lightbox.js";
 import { resolveAccess, persistAccess, DESK_TOKEN_KEY } from "../shared/token.js";
 import { installLaunchManifest } from "../shared/pwa.js";
 import { dataCacheKey, readDataCache, writeDataCache } from "../shared/datacache.js";
+import { flattenHistory, searchHistory } from "../shared/history.js";
 
 // Trash glyph for the per-request delete control (inline SVG, no icon font / emoji).
 const TRASH_SVG =
@@ -434,10 +435,12 @@ function render() {
   }
   $("#panel-requests").classList.toggle("hidden", state.view !== "requests");
   $("#panel-events").classList.toggle("hidden", state.view !== "events");
+  $("#panel-history").classList.toggle("hidden", state.view !== "history");
   $("#panel-clients").classList.toggle("hidden", state.view !== "clients");
 
   if (state.view === "requests") renderRequests();
   else if (state.view === "events") renderEvents();
+  else if (state.view === "history") renderHistory();
   else if (state.view === "clients") renderClients();
 }
 
@@ -1103,6 +1106,63 @@ function eventCard(e, past = false) {
 // ===================================================================
 // CLIENTS view
 // ===================================================================
+// ===================================================================
+// HISTORY view — one searchable timeline of everything the worker and
+// clients did (activity log + threads + drafts + change notes). This is
+// how drafting work done on the Mac/VPS stays visible from the phone.
+// ===================================================================
+const HISTORY_SHOW_MAX = 200;
+const HISTORY_KIND_BADGE = {
+  ready: "go", done: "go", error: "warn", "change-note": "warn", message: "", draft: "",
+};
+
+function renderHistory() {
+  const list = $("#history-list");
+  const all = flattenHistory(state.requests, state.clients.map((c) => ({ id: c.clientId, name: c.name })));
+  const hits = searchHistory(all, state.historyQuery || "");
+  $("#count-history").textContent = state.historyQuery && hits.length ? String(hits.length) : "";
+
+  if (!all.length) {
+    list.replaceChildren(el("div", { class: "card empty" }, "Nothing recorded yet. Worker activity will show up here."));
+    return;
+  }
+  if (!hits.length) {
+    list.replaceChildren(el("div", { class: "card empty" }, `No matches for “${state.historyQuery}”.`));
+    return;
+  }
+
+  list.replaceChildren(
+    ...hits.slice(0, HISTORY_SHOW_MAX).map((h) => {
+      const badge = HISTORY_KIND_BADGE[h.kind];
+      const card = el("div", { class: "card history-entry", role: "button", tabindex: "0" },
+        el("div", { class: "spread" },
+          el("div", { class: "row" },
+            el("span", { class: "badge" + (badge ? " " + badge : "") }, h.kind),
+            el("span", { class: "req-client" }, h.clientName || "—")
+          ),
+          el("span", { class: "req-when" }, relTime(h.at))
+        ),
+        el("div", { class: "small", style: "margin-top:6px" }, h.title),
+        el("div", { class: "muted small", style: "margin-top:2px" }, h.text)
+      );
+      // Tap-through: open Requests filtered to this entry's client.
+      card.addEventListener("click", () => {
+        state.view = "requests";
+        state.filterClient = h.clientId || "all";
+        saveUiState();
+        render();
+      });
+      return card;
+    }),
+    hits.length > HISTORY_SHOW_MAX ? el("div", { class: "muted small", style: "text-align:center;padding:8px" }, `Showing the newest ${HISTORY_SHOW_MAX} of ${hits.length} — refine the search to see older entries.`) : null
+  );
+}
+
+$("#history-search").addEventListener("input", (e) => {
+  state.historyQuery = e.target.value;
+  renderHistory();
+});
+
 function renderClients() {
   const list = $("#clients-list");
   const rows = state.clients.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)));

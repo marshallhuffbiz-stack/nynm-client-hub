@@ -69,6 +69,9 @@
         <button class="tab" data-view="events" role="tab" aria-selected="false">
           Events <span class="tab-count" id="count-events"></span>
         </button>
+        <button class="tab" data-view="history" role="tab" aria-selected="false">
+          History <span class="tab-count" id="count-history"></span>
+        </button>
         <button class="tab" data-view="clients" role="tab" aria-selected="false">
           Clients <span class="tab-count" id="count-clients"></span>
         </button>
@@ -85,6 +88,15 @@
       <!-- Events view -->
       <section id="panel-events" class="panel hidden" role="tabpanel">
         <div id="events-list"></div>
+      </section>
+
+      <!-- History view: one searchable timeline of everything the worker and
+           clients did — server activity log + threads + drafts + change notes.
+           This is how desktop/VPS drafting work stays visible from the phone. -->
+      <section id="panel-history" class="panel hidden" role="tabpanel">
+        <input id="history-search" type="search" placeholder="Search everything — client, caption, request, action…"
+               aria-label="Search history" autocomplete="off" />
+        <div id="history-list"></div>
       </section>
 
       <!-- Clients view -->

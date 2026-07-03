@@ -73,6 +73,17 @@ It runs every **90 seconds** (the plist's `StartInterval`): notifies you of new 
 
 ---
 
+## VPS worker (the live deployment since 2026-07-02)
+
+The drafting worker runs 24/7 on the Hetzner VPS (`root@5.161.224.224`, the Postiz box) as user `relay` — the Mac launchd job is retired (plist kept at `worker/com.nynm.client-worker.plist` as the rollback path).
+
+- **Layout:** repo at `/home/relay/client-hub`; brands/skills at `/home/relay/.claude/`; secrets copied by hand (`worker/config.json` with `claudeBin:/usr/bin/claude`, `~/.config/postiz/credentials` with `POSTIZ_NODE_BIN`/`POSTIZ_CLI_BIN` overrides). A `/Users/MarshallHuff -> /home/relay` symlink makes the Mac-absolute `file://` paths inside brand templates resolve unchanged.
+- **Scheduling:** systemd `relay-worker.timer` → `relay-worker.service` every 90s (unit sources in `worker/systemd/`, installed to `/etc/systemd/system/`). Logs: `journalctl -u relay-worker.service`. The macOS selfheal is platform-gated off on Linux.
+- **Asset freshness:** the Mac pushes brand/skill changes hourly via `scripts/sync-assets-to-vps.sh` (LaunchAgent `com.nynm.asset-sync`).
+- **Health checks:** `systemctl list-timers relay-worker.timer`; one manual tick: `su - relay -c 'cd client-hub && node worker/poller.mjs'`.
+- **Image gen:** `imagery` (OpenAI API) is live (`uv` symlinked into `/usr/local/bin`); `chatgpt-image` needs a one-time Codex CLI login on the VPS.
+- VPS timezone is America/New_York so `digestHour` and scheduled times behave like the Mac did.
+
 ## How it flows
 Client submits in the portal → lands in the Sheet → you get a phone push + Mac alert → open the Desk → add a comment, tap **Send to Claude** → the worker fires Claude, which stages a draft → you **Approve** → it schedules via Postiz / applies the change. **Nothing goes live without your approval.**
 

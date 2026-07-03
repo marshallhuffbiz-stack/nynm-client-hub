@@ -225,3 +225,13 @@ code {
   font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 0.9em;
   background: var(--gray-fill); padding: 1px 6px; border-radius: 6px; color: var(--label);
 }
+
+/* ===================== History view ===================== */
+#history-search {
+  width: 100%; margin-bottom: 12px; min-height: 44px;
+  border: 1px solid var(--separator); border-radius: 12px; padding: 0 14px;
+  font: inherit; background: var(--bg-elevated, #fff); color: var(--label);
+}
+.history-entry { cursor: pointer; }
+.history-entry:active { opacity: 0.7; }
+.history-entry .badge { text-transform: none; }

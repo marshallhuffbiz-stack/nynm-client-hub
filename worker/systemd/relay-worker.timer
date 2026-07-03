@@ -1,0 +1,13 @@
+# Fires the Relay worker tick every 90s (mirrors launchd StartInterval=90).
+# Installed at /etc/systemd/system/relay-worker.timer; enable with:
+#   systemctl enable --now relay-worker.timer
+[Unit]
+Description=Relay client-hub worker every 90s
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=90
+AccuracySec=5
+
+[Install]
+WantedBy=timers.target

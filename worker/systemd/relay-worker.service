@@ -1,0 +1,21 @@
+# Relay drafting worker — one tick (the systemd equivalent of the Mac launchd job).
+# Installed at /etc/systemd/system/relay-worker.service on the VPS.
+# The poller has its own .lock + stale-lock reclaim, so an overlapping start is safe.
+[Unit]
+Description=Relay client-hub worker tick
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=relay
+WorkingDirectory=/home/relay/client-hub
+ExecStart=/usr/bin/node worker/poller.mjs
+Environment=HOME=/home/relay
+Environment=NODE_ENV=production
+# A drain can legitimately run several minutes (render + image gen). The poller
+# already SIGTERM/SIGKILLs a wedged drain at drainTimeoutMs; this is the backstop.
+TimeoutStartSec=20min
+# Keep one render's memory pressure from taking the box (Postiz shares it).
+MemoryHigh=1200M
+Nice=5
