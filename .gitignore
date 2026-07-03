@@ -13,3 +13,5 @@ worker/.state.json
 worker/drain-jobs.json
 worker/logs/
 worker/out/
+worker/.lock
+worker/.selfheal.json
