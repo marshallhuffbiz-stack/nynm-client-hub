@@ -8,6 +8,8 @@
   "_claudeOauthToken_help": "Long-lived OAuth token from `claude setup-token` — uses your Claude SUBSCRIPTION (Max plan), NOT the pay-per-token API. REQUIRED for the headless drain because launchd can't read the macOS keychain; the worker passes it to claude via CLAUDE_CODE_OAUTH_TOKEN and strips ANTHROPIC_API_KEY so the subscription always wins. Regenerate ~yearly.",
   "autoEvents": { "enabled": false, "clientId": "eats-on-601", "siteDir": "/absolute/path/to/eats-on-601-site" },
   "_autoEvents_help": "When enabled, a dated request for clientId is auto-extracted (Opus), pushed onto the site's src/content/events.json (siteDir, must be a clean checkout on main), and a fully-automatic day-of 8AM ET post is scheduled. Leave disabled until the site dir + git push are verified.",
+  "sites": { "eats-on-601": { "dir": "/absolute/path/to/eats-on-601-site", "liveUrl": "https://eatson601.com" } },
+  "_sites_help": "Deterministic website-deploy lane (worker/site-apply.mjs), keyed by clientId. On approval of a `type:website` request the worker applies the drain's staged files (worker/out/<id>/scratch/ + manifest.json) into `dir` (a clean checkout on main), commits ONLY those files, pushes main, then polls `liveUrl` for the manifest's verify assertions and marks the request done ONLY once confirmed live. Omit or leave empty to keep website changes on the old drain path.",
   "digestHour": 8,
   "caps": { "draft": 5, "ship": 5 },
   "push": {

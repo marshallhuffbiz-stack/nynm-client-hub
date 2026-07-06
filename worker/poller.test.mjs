@@ -298,3 +298,41 @@ test("submitRequest is idempotent on clientRequestId (no duplicate on a retry)",
   const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
   assert.equal(all.requests.filter((x) => x.meta && x.meta.clientRequestId === reqId).length, 1);
 });
+
+test("runOnce routes an approved website request to the siteShipper, never the drain", async () => {
+  // A fresh approved website change (its own client so it can't disturb the fixture rows).
+  await fetch(base, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ admin: "A", action: "submitRequest", request: { clientId: "the-o", type: "website", description: "take Arron Side Chicks off the site" } }),
+  });
+  let all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const w = all.requests.find((r) => r.type === "website" && r.stage === "submitted");
+  await apiUpdate(base, "A", w.id, { stage: "approved" });
+
+  const drainShipsSeen = [];
+  const drainer = async ({ ships = [], drafts = [] }) => { drainShipsSeen.push(...ships); return { drafted: drafts.length, shipped: ships.length }; };
+  const shipper = async () => ({ shipped: 0, failed: 0 });
+  const siteSeen = [];
+  const siteShipper = async ({ apiBase, adminToken, ships }) => {
+    for (const s of ships) {
+      siteSeen.push({ id: s.id, siteFolder: s.siteFolder });
+      await apiUpdate(apiBase, adminToken, s.id, { action: "ship" });
+      await apiUpdate(apiBase, adminToken, s.id, { action: "done" });
+    }
+    return { deployed: ships.length, failed: 0, deferred: 0 };
+  };
+
+  const res = await runOnce({
+    apiBase: base, adminToken: "A", drainer, shipper, siteShipper,
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    getLastDigest: async () => new Date().toISOString(), setLastDigest: async () => {}, now: new Date(),
+  });
+
+  assert.ok(siteSeen.some((s) => s.id === w.id), "website request must reach the siteShipper");
+  assert.ok(!drainShipsSeen.some((s) => s.id === w.id), "website request must NOT reach the drain ship lane");
+  assert.equal(siteSeen.find((s) => s.id === w.id).siteFolder, "/sites/the-o", "ship arrives enriched with the client's siteFolder");
+  assert.equal(res.deployed, 1);
+  const after = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  assert.equal(after.requests.find((r) => r.id === w.id).stage, "done");
+});

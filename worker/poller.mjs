@@ -17,6 +17,7 @@ import { makeShipper, makePostizClient } from "./publish.mjs";
 import { makeAutoEvents } from "./auto-events.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
+import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
 import { onTickOutcome, repairCommand } from "./selfheal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -31,6 +32,7 @@ export async function runOnce({
   caps = { draft: 5, ship: 5 },
   drainer,
   shipper,
+  siteShipper,
   autoEvents,
   notifier,
   digestHour = 8,
@@ -82,9 +84,17 @@ export async function runOnce({
   // approved item goes to the drain (old behavior), so nothing is silently dropped.
   // Cap each lane independently (ships arrive uncapped from detectJobs) so a backlog
   // of website/other approved work can't starve social auto-publishing, and vice versa.
+  // Website changes get their own deterministic lane (worker/site-apply.mjs): apply the
+  // drain's staged files, push, and VERIFY the live URL before marking done — so "done"
+  // can never again mean "committed locally but never deployed". Diverted out of the
+  // drain lane exactly like social posts, and only when a siteShipper is injected (else
+  // website work stays with the drain — old behavior, nothing silently dropped).
   const shipCap = (caps && caps.ship) || 5;
   const socialShips = (shipper ? jobs.ships.filter((r) => SOCIAL_SHIP_TYPES.has(r.type)) : []).slice(0, shipCap);
-  const drainShips = (shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships).slice(0, shipCap);
+  const websiteShips = (siteShipper ? jobs.ships.filter((r) => r.type === "website") : []).slice(0, shipCap);
+  const drainShips = (shipper ? jobs.ships.filter((r) => !SOCIAL_SHIP_TYPES.has(r.type)) : jobs.ships)
+    .filter((r) => !(siteShipper && r.type === "website"))
+    .slice(0, shipCap);
 
   // Drain jobs go out ENRICHED (client join: brandSlug/siteFolder/clientName; event
   // join: start/end times) — see enrichJobs. Raw rows have none of that, and drain.md
@@ -107,6 +117,17 @@ export async function runOnce({
     shipResult = (await shipper({ apiBase, adminToken, ships: socialShips, clients: all.clients || [] })) || shipResult;
   }
 
+  let siteResult = { deployed: 0, failed: 0, deferred: 0 };
+  if (websiteShips.length && siteShipper) {
+    siteResult =
+      (await siteShipper({
+        apiBase,
+        adminToken,
+        ships: enrichJobs(websiteShips, all.clients || [], all.events || [], reqs),
+        clients: all.clients || [],
+      })) || siteResult;
+  }
+
   let digest = false;
   if (getLastDigest && shouldRunDigest(await getLastDigest(), now, digestHour)) {
     await notifier.notifyDigest(digestSummary(reqs));
@@ -122,6 +143,8 @@ export async function runOnce({
     drafted: drainResult.drafted || 0,
     published: shipResult.shipped || 0,
     shipFailed: shipResult.failed || 0,
+    deployed: siteResult.deployed || 0,
+    deployFailed: siteResult.failed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
     recovered,
@@ -344,12 +367,42 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       });
     }
 
+    // Deterministic website deploy lane — wired only when config.sites has entries
+    // (dormant otherwise). Each entry maps a clientId to its site working dir + live URL:
+    //   "sites": { "eats-on-601": { "dir": "/…/Eats On 601 Website", "liveUrl": "https://eatson601.com" } }
+    // prepare() loads the drain's manifest (worker/out/<id>/manifest.json) + scratch files
+    // and binds the git/io/live adapters for that client's repo.
+    let siteShipper = null;
+    if (cfg.sites && Object.keys(cfg.sites).length) {
+      const prepareSite = async (r) => {
+        const site = cfg.sites[r.clientId];
+        if (!site || !site.dir || !site.liveUrl) return { error: `no deploy config for client "${r.clientId}"` };
+        const outDir = join(HERE, "out", r.id);
+        let manifest;
+        try {
+          manifest = JSON.parse(await readFile(join(outDir, "manifest.json"), "utf8"));
+        } catch (e) {
+          return { error: `no deploy manifest at worker/out/${r.id}: ${e.message}` };
+        }
+        if (!Array.isArray(manifest.files) || manifest.files.length === 0) return { error: "deploy manifest lists no files" };
+        return {
+          manifest,
+          git: makeRepoGit(site.dir),
+          io: makeFilesIO(site.dir, join(outDir, "scratch")),
+          live: makeLive(site.liveUrl),
+          liveUrl: site.liveUrl,
+        };
+      };
+      siteShipper = makeSiteShipper({ apiUpdate, notifier, prepare: prepareSite });
+    }
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
       caps: cfg.caps || { draft: 5, ship: 5 },
       drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model, oauthToken: cfg.claudeOauthToken, timeoutMs: cfg.drainTimeoutMs ?? 10 * 60 * 1000 }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
+      siteShipper,
       autoEvents,
       notifier,
       digestHour: cfg.digestHour ?? 8,
