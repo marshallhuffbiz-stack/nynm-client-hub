@@ -11,7 +11,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { detectJobs, shouldRunDigest, detectOrphans, planOrphanRecovery, enrichJobs } from "./jobs.mjs";
 import { digestSummary } from "../core/model.mjs";
-import { apiFetchAll, apiUpdate } from "./writeback.mjs";
+import { apiFetchAll, apiUpdate, apiSubmit } from "./writeback.mjs";
 import { makeNotifier, macNotify, pushNotify } from "./notify.mjs";
 import { makeShipper, makePostizClient } from "./publish.mjs";
 import { makeAutoEvents } from "./auto-events.mjs";
@@ -19,6 +19,9 @@ import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
 import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
 import { buildSchedule, reconcile as reconcileSchedule, makeScheduleIO } from "./schedule-sync.mjs";
+import { runDailyPost } from "./daily-truck-post.mjs";
+import { runMonthly } from "./monthly-truck-post.mjs";
+import { todayInET, etOffset } from "./events-auto.mjs";
 import { onTickOutcome, repairCommand } from "./selfheal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -35,6 +38,7 @@ export async function runOnce({
   shipper,
   siteShipper,
   scheduleSync,
+  truckPosts,
   autoEvents,
   notifier,
   digestHour = 8,
@@ -145,6 +149,20 @@ export async function runOnce({
     }
   }
 
+  // Truck-post lane: submit+queue the day-of (and, on the draft day, the monthly) food-truck
+  // post via the EXISTING drain→auto-approve→publish pipeline. Reuses the SAME `all` payload
+  // (no second fetch). Dormant unless a site has schedule.enabled. Fail-soft belt-and-
+  // suspenders (the runner is itself fail-soft per client): guard the call too so a broken
+  // truck-post lane can NEVER break the drain/ship/site/schedule lanes.
+  let truckResult = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0 };
+  if (truckPosts) {
+    try {
+      truckResult = (await truckPosts({ all, now })) || truckResult;
+    } catch (e) {
+      console.error(new Date().toISOString(), "truck-post lane error (caught, tick continues):", e && e.message ? e.message : String(e));
+    }
+  }
+
   let digest = false;
   if (getLastDigest && shouldRunDigest(await getLastDigest(), now, digestHour)) {
     await notifier.notifyDigest(digestSummary(reqs));
@@ -165,6 +183,14 @@ export async function runOnce({
     scheduleDeployed: scheduleResult.deployed || 0,
     scheduleSkipped: scheduleResult.skipped || 0,
     scheduleFailed: scheduleResult.failed || 0,
+    dailyPostCreated: truckResult.dailyPostCreated || 0,
+    dailyPostQueued: truckResult.dailyPostQueued || 0,
+    dailyPostSkipped: truckResult.dailyPostSkipped || 0,
+    dailyPostFailed: truckResult.dailyPostFailed || 0,
+    monthlyCreated: truckResult.monthlyCreated || 0,
+    monthlyQueued: truckResult.monthlyQueued || 0,
+    monthlySkipped: truckResult.monthlySkipped || 0,
+    monthlyFailed: truckResult.monthlyFailed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
     recovered,
@@ -239,6 +265,85 @@ export async function runScheduleSync({ cfg = {}, all = {}, prepare, now = new D
     } catch (e) {
       summary.failed += 1;
       log(new Date().toISOString(), `schedule-sync[${clientId}]: FAILED (caught, tick continues) — ${e && e.message ? e.message : String(e)}`);
+    }
+  }
+  return summary;
+}
+
+// The ET wall-clock "HH:MM" for an instant (used by the daily/monthly time-gates so a 90s
+// VPS tick that lands after the configured post time fires the post, but no earlier).
+export function etHhmm(now = new Date()) {
+  const ymd = todayInET(now);
+  const offH = Number(etOffset(ymd).slice(0, 3));
+  const shifted = new Date(now.getTime() + offH * 3600 * 1000);
+  return shifted.toISOString().slice(11, 16); // "HH:MM"
+}
+
+// True once the ET wall-clock time is at/after "HH:MM".
+export function atOrAfterEt(now, hhmm) {
+  return etHhmm(now) >= String(hhmm || "00:00");
+}
+
+// Truck-post lane (poller-side). For every schedule-enabled site, submit+queue the day-of
+// and (on the draft day) the monthly post via the EXISTING drain→auto-approve→publish
+// pipeline — runDailyPost / runMonthly do the idempotent create/queue keyed on a
+// clientRequestId, so a re-run across the flaky VPS never double-posts.
+//
+// TIME-GATES: daily fires only once ET is at/after schedule.dailyPostTime (default "08:00").
+// Monthly fires only on schedule.monthlyDraftDay (default the 25th), and also only at/after
+// the daily time. Both are FAIL-SOFT per client (a throw is caught + logged, never breaks
+// the tick or another client's post). The client's portal token is pulled from all.clients
+// (submitRequest forces the tenant from it). If a site has no token, that client is skipped
+// (logged) rather than throwing.
+export async function runTruckPosts({ cfg = {}, all = {}, now = new Date(), log = console.error }) {
+  const summary = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0 };
+  const sites = (cfg && cfg.sites) || {};
+  const clients = all.clients || [];
+
+  for (const clientId of Object.keys(sites)) {
+    const site = sites[clientId];
+    const sched = site && site.schedule;
+    if (!sched || !sched.enabled) continue; // lane opt-in per client (dormant otherwise)
+
+    const dailyTime = sched.dailyPostTime || "08:00";
+    const draftDay = Number(sched.monthlyDraftDay ?? 25);
+
+    const client = clients.find((c) => c && c.clientId === clientId);
+    const clientToken = client && client.token;
+    if (!clientToken) {
+      log(new Date().toISOString(), `truck-post[${clientId}]: no portal token in all.clients — skipping (can't submit as the client)`);
+      continue;
+    }
+
+    const submitRequest = (request, token) => apiSubmit(cfg.execUrl, token, request, request && request.clientRequestId);
+    const updateRequest = (id, patch) => apiUpdate(cfg.execUrl, cfg.adminToken, id, patch);
+
+    // Daily lane — gated on the ET time-of-day.
+    if (atOrAfterEt(now, dailyTime)) {
+      try {
+        const res = await runDailyPost({ all, submitRequest, updateRequest, now, config: sched, clientId, clientToken });
+        if (res && res.created) summary.dailyPostCreated += 1;
+        else if (res && res.queued) summary.dailyPostQueued += 1;
+        else if (res && res.skipped) summary.dailyPostSkipped += 1;
+        // {created:false, reason:"no-trucks"} is a normal no-op — not surfaced as a failure.
+      } catch (e) {
+        summary.dailyPostFailed += 1;
+        log(new Date().toISOString(), `truck-post[${clientId}] daily: FAILED (caught, tick continues) — ${e && e.message ? e.message : String(e)}`);
+      }
+    }
+
+    // Monthly lane — only on the draft day, at/after the daily time.
+    const dom = Number(todayInET(now).slice(8, 10));
+    if (dom === draftDay && atOrAfterEt(now, dailyTime)) {
+      try {
+        const res = await runMonthly({ all, submitRequest, updateRequest, now, clientId, clientToken });
+        if (res && res.created) summary.monthlyCreated += 1;
+        else if (res && res.queued) summary.monthlyQueued += 1;
+        else if (res && res.skipped) summary.monthlySkipped += 1;
+      } catch (e) {
+        summary.monthlyFailed += 1;
+        log(new Date().toISOString(), `truck-post[${clientId}] monthly: FAILED (caught, tick continues) — ${e && e.message ? e.message : String(e)}`);
+      }
     }
   }
   return summary;
@@ -504,6 +609,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scheduleSync = ({ all }) => runScheduleSync({ cfg, all, prepare: prepareScheduleSite });
     }
 
+    // Truck-post lane — wired only when at least one site has schedule.enabled (dormant
+    // otherwise). Submits+queues the day-of (and, on the draft day, the monthly) food-truck
+    // post through the same drain→auto-approve→publish pipeline. Reuses the tick's `all`.
+    let truckPosts = null;
+    if (cfg.sites && Object.values(cfg.sites).some((s) => s && s.schedule && s.schedule.enabled)) {
+      truckPosts = ({ all, now }) => runTruckPosts({ cfg, all, now });
+    }
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
@@ -512,6 +625,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
       siteShipper,
       scheduleSync,
+      truckPosts,
       autoEvents,
       notifier,
       digestHour: cfg.digestHour ?? 8,

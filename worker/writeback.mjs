@@ -30,6 +30,18 @@ export function apiUpdate(apiBase, adminToken, id, patch) {
   });
 }
 
+// Create a request as the CLIENT (a `c` token, not the admin token) — the ONLY create
+// path (updateRequest is update-only, 404 on a missing id). Mirrors the browser's
+// portalApi.submit. Idempotent on clientRequestId server-side (a retry with the same id
+// returns the original row, deduped). Returns { ok, id } (or { deduped:true } on a retry).
+export function apiSubmit(apiBase, clientToken, request, clientRequestId) {
+  return fetchJson(apiBase, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ c: clientToken, action: "submitRequest", request, clientRequestId }),
+  });
+}
+
 // Post a message into a request's client↔team thread as admin (the backend's
 // postMessage action). Used by the shipper to tell the client their post is live.
 export function apiMessage(apiBase, adminToken, id, text) {

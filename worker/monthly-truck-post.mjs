@@ -1,11 +1,13 @@
-// worker/monthly-truck-post.mjs — the monthly schedule draft for Eats on 601. Gathers a
-// month's scheduled bookings, assembles a branded monthly-calendar render spec + caption,
-// and creates a `post` request draft (via the injected createDraft seam) that lands in the
-// Desk for Marshall's approval — the existing approve→publish lane then ships it.
+// worker/monthly-truck-post.mjs — the monthly schedule-graphic post for a schedule-enabled
+// client (e.g. Eats on 601). Like the daily post, this does NOT render or publish anything
+// itself — the drain renders the branded month-at-a-glance graphic and the existing
+// approve→publish lane ships it. The ONLY difference from daily: monthly is ALWAYS
+// Marshall-approved (autoApprove:false, always) — it never auto-approves.
 //
-// Live backend request-creation + live Postiz are DEFERRED activation seams: createDraft
-// is injected (mocked in tests) and, when wired live, calls the backend submitRequest
-// action to create a `post` request in `ready` stage. Nothing here hits a live service.
+// runMonthly is the same idempotent state machine as runDailyPost, keyed on
+// `<clientId>-monthly-<yyyymm>`. The request's existence + stage IS the state (no state file),
+// so a re-run across the flaky VPS connection never creates a duplicate and can recover a
+// partial create. All outward effects are dependency-injected.
 import { hoursDisplay } from "./schedule-sync.mjs";
 
 const MON_FULL = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -18,81 +20,114 @@ function displayDate(ymd) {
   return `${WD[dt.getUTCDay()]} · ${MON[m - 1]} ${d}`;
 }
 
-// The YYYY-MM one calendar month after `now` (ET-agnostic; month rollover only).
-export function nextMonth(now = new Date()) {
-  const y = now.getUTCFullYear();
-  const m = now.getUTCMonth(); // 0-indexed
-  const d = new Date(Date.UTC(y, m + 1, 1));
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-// Scheduled bookings whose date falls in `YYYY-MM`, sorted ascending by date.
-export function bookingsForMonth(bookings, month) {
+// Scheduled bookings whose date falls in `YYYY-MM` for `clientId`, sorted ascending by date.
+export function bookingsForMonth(bookings, month, clientId) {
   return (bookings || [])
-    .filter((b) => b && b.status === "scheduled" && typeof b.date === "string" && b.date.startsWith(month + "-"))
+    .filter(
+      (b) =>
+        b &&
+        b.status === "scheduled" &&
+        typeof b.date === "string" &&
+        b.date.startsWith(month + "-") &&
+        (clientId == null || b.clientId === clientId)
+    )
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-// Assemble the monthly-calendar render inputs + caption for `month` (YYYY-MM). One entry
-// per scheduled day (multiple trucks per day grouped into that day's vendors[]).
-export function buildMonthlyDraft(bookings, { month, now = new Date() } = {}) {
-  const rows = bookingsForMonth(bookings, month);
+// Build the month's post REQUEST fields (pure): title + a description that lays out the
+// month's schedule (one line per scheduled day, trucks + hours) and asks the drain for a
+// branded month-at-a-glance schedule graphic, plus the AUTO comment for the drain.
+export function buildMonthlyPost(bookings, vendors, { month, clientId, now } = {}) {
+  const byId = new Map();
+  for (const v of vendors || []) if (v && v.id) byId.set(v.id, v);
+
+  const rows = bookingsForMonth(bookings, month, clientId);
   const byDate = new Map();
   for (const b of rows) {
     if (!byDate.has(b.date)) byDate.set(b.date, []);
+    const reg = byId.get(b.vendorId) || {};
     byDate.get(b.date).push({
-      id: b.vendorId,
-      name: b.vendorName || "Food truck",
+      name: reg.name || b.vendorName || "Food truck",
       hours: hoursDisplay(b.startTime, b.endTime),
     });
   }
-  const days = [...byDate.keys()].sort().map((date) => ({
-    date,
-    display: displayDate(date),
-    vendors: byDate.get(date),
-  }));
+  const days = [...byDate.keys()].sort();
 
   const [y, m] = month.split("-").map(Number);
   const monthLabel = `${MON_FULL[m - 1]} ${y}`;
-  const caption = days.length
-    ? `Here's who's rolling into Eats on 601 this ${MON_FULL[m - 1]}! Save the dates and come hungry all month long.`
-    : `${monthLabel} lineup coming soon at Eats on 601 — check back for the trucks!`;
 
-  return {
-    render: {
-      brand: "eats-on-601",
-      template: "monthly-calendar",
-      month,
-      monthLabel,
-      days,
-    },
-    caption,
-  };
-}
+  const title = `Monthly schedule — ${monthLabel}`;
 
-// Create the monthly draft. Deps:
-//   fetchState()       → backend admin payload { vendors[], bookings[] }
-//   createDraft(draft) → create a `post` request draft (DEFERRED live seam: backend
-//                        submitRequest → `ready` stage → Desk approval → publish lane)
-//   now                → clock
-//   month (optional)   → YYYY-MM; defaults to next month from `now` (on-demand callers
-//                        pass the current month explicitly).
-export async function runMonthly({ fetchState, createDraft, now = new Date(), month }) {
-  const target = month || nextMonth(now);
-  const state = (await fetchState()) || {};
-  const bookings = state.bookings || [];
-
-  const draft = buildMonthlyDraft(bookings, { month: target, now });
-
-  // LIVE ACTIVATION SEAM: createDraft, when wired live, creates a `post` request in the
-  // Desk (ready stage) for approval. Injected + mocked in tests.
-  const res = await createDraft({
-    type: "post",
-    clientId: "eats-on-601",
-    caption: draft.caption,
-    render: draft.render,
-    note: `monthly schedule draft for ${draft.render.monthLabel} — review and approve to publish`,
+  const scheduleLines = days.map((date) => {
+    const vs = byDate.get(date);
+    const list = vs.map((v) => (v.hours ? `${v.name} (${v.hours})` : v.name)).join(", ");
+    return `${displayDate(date)}: ${list}`;
   });
 
-  return { ok: !!(res && res.ok !== false), month: target, draft, res };
+  const description = days.length
+    ? `Create a branded month-at-a-glance schedule graphic for Eats on 601 for ${monthLabel}, ` +
+      `showing every food-truck day and its trucks + hours, plus a short on-brand caption ` +
+      `inviting the community to save the dates. Schedule for ${monthLabel}: ${scheduleLines.join("; ")}.`
+    : `Create a branded month-at-a-glance schedule graphic for Eats on 601 for ${monthLabel}. ` +
+      `No trucks are booked yet — design a "lineup coming soon, check back" graphic with a short on-brand caption.`;
+
+  const comment =
+    `Monthly schedule post for ${monthLabel}. Design the month's food-truck calendar as a ` +
+    `branded graphic and write a short save-the-dates caption. Marshall approves this before it ships.`;
+
+  return { title, description, comment, monthLabel, dayCount: days.length };
+}
+
+// The YYYY-MM of `now` (the month whose schedule we're announcing). ET-agnostic (month
+// granularity only — the exact instant never straddles a month for the 25th-of-month gate).
+export function monthOf(now = new Date()) {
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+// Create the monthly draft. Same idempotent state machine as runDailyPost, but autoApprove
+// is ALWAYS false (monthly is always Marshall-approved). Deps mirror runDailyPost. Keyed on
+// `<clientId>-monthly-<yyyymm>`. targetMonth overrides the month (else monthOf(now)).
+//   no request for crid                → submit + queue+markers → { created:true, id }
+//   request exists, stage "submitted"  → queue+markers only (recover partial) → { queued:true, id }
+//   request exists, later stage        → { skipped:true, stage } (idempotent)
+export async function runMonthly({ all, submitRequest, updateRequest, now = new Date(), clientId, clientToken, targetMonth }) {
+  const month = targetMonth || monthOf(now);
+  const bookings = (all && all.bookings) || [];
+  const vendors = (all && all.vendors) || [];
+  const requests = (all && all.requests) || [];
+
+  const crid = `${clientId}-monthly-${month.replace("-", "")}`;
+  const existing = requests.find((r) => r && r.clientId === clientId && r.meta && r.meta.clientRequestId === crid);
+
+  const { title, description, comment } = buildMonthlyPost(bookings, vendors, { month, clientId, now });
+
+  // Monthly ALWAYS requires Marshall's approval → autoApprove:false. No scheduledFor (the
+  // day-of anchor is a daily concept); the drain drafts, Marshall approves, the lane ships.
+  const queuePatch = {
+    action: "send",
+    comment,
+    meta: {
+      ...(existing && existing.meta ? existing.meta : {}),
+      autoEvent: {
+        key: crid,
+        month,
+        autoApprove: false,
+      },
+    },
+  };
+
+  if (!existing) {
+    const created = await submitRequest({ type: "post", title, description, attachments: [], clientRequestId: crid }, clientToken);
+    const id = created && created.id;
+    if (!id) return { created: false, reason: "submit-failed", month, res: created };
+    await updateRequest(id, queuePatch);
+    return { created: true, id, month };
+  }
+
+  if (existing.stage === "submitted") {
+    await updateRequest(existing.id, queuePatch);
+    return { queued: true, id: existing.id, month };
+  }
+
+  return { skipped: true, stage: existing.stage, id: existing.id, month };
 }

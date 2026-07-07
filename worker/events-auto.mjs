@@ -54,6 +54,18 @@ export function dayOfPostIso(ymd) {
   return etIso(ymd, "08:00:00");
 }
 
+// "Today" as a YYYY-MM-DD wall-clock date in America/New_York, DST-aware. Shift the UTC
+// instant by the ET offset and read the calendar date of the shifted instant — a UTC time
+// that is still "yesterday" in ET resolves to the ET date, not the UTC date. etOffset needs
+// a ymd to pick EST/EDT; the UTC date is a safe seed (the offset only changes on the 2 AM
+// DST-transition Sundays, and the 8 AM daily gate never lands in that hour).
+export function todayInET(now = new Date()) {
+  const seedYmd = now.toISOString().slice(0, 10);
+  const offH = Number(etOffset(seedYmd).slice(0, 3)); // "-04:00" -> -4
+  const shifted = new Date(now.getTime() + offH * 3600 * 1000);
+  return shifted.toISOString().slice(0, 10);
+}
+
 function validYmd(ymd) {
   return typeof ymd === "string" && /^\d{4}-\d{2}-\d{2}$/.test(ymd);
 }
