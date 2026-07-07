@@ -18,6 +18,7 @@ import { makeAutoEvents } from "./auto-events.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
 import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
+import { buildSchedule, reconcile as reconcileSchedule, makeScheduleIO } from "./schedule-sync.mjs";
 import { onTickOutcome, repairCommand } from "./selfheal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +34,7 @@ export async function runOnce({
   drainer,
   shipper,
   siteShipper,
+  scheduleSync,
   autoEvents,
   notifier,
   digestHour = 8,
@@ -128,6 +130,21 @@ export async function runOnce({
       })) || siteResult;
   }
 
+  // Schedule-sync lane: auto-push the food-truck schedule to the Eats site when the
+  // backend's bookings change. Reuses the SAME `all` payload fetched at the top of the
+  // tick (no second fetch). Only runs when a scheduleSync runner is injected (dormant
+  // otherwise, so nothing changes for clients without schedule enabled). The runner is
+  // itself fail-soft, but belt-and-suspenders: guard the call too so a broken schedule
+  // sync can NEVER break the drain/ship/site lanes.
+  let scheduleResult = { deployed: 0, unchanged: 0, skipped: 0, failed: 0 };
+  if (scheduleSync) {
+    try {
+      scheduleResult = (await scheduleSync({ all })) || scheduleResult;
+    } catch (e) {
+      console.error(new Date().toISOString(), "schedule-sync lane error (caught, tick continues):", e && e.message ? e.message : String(e));
+    }
+  }
+
   let digest = false;
   if (getLastDigest && shouldRunDigest(await getLastDigest(), now, digestHour)) {
     await notifier.notifyDigest(digestSummary(reqs));
@@ -145,10 +162,86 @@ export async function runOnce({
     shipFailed: shipResult.failed || 0,
     deployed: siteResult.deployed || 0,
     deployFailed: siteResult.failed || 0,
+    scheduleDeployed: scheduleResult.deployed || 0,
+    scheduleSkipped: scheduleResult.skipped || 0,
+    scheduleFailed: scheduleResult.failed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
     recovered,
   };
+}
+
+// Schedule-sync lane (poller-side, deterministic). For every client in cfg.sites whose
+// `schedule.enabled` is true, build the food-truck schedule from the SAME `all` payload
+// already fetched this tick (filtered to that client's bookings/vendors — no second
+// fetch), and if it differs from the site repo's current schedule.json, push+verify it
+// via schedule-sync's reconcile() (which reuses the real git/io/live built by `prepare`).
+//
+// SAFETY GUARD (empty-schedule): if the backend has no bookings yet so the built schedule
+// is EMPTY, but the site's current schedule.json is NON-empty, we SKIP entirely and log —
+// never overwriting the migrated bootstrap schedule with nothing. (This is enforced HERE,
+// before reconcile, because reconcile's plain content-diff would happily deploy [] over a
+// real schedule.)
+//
+// FAIL-SOFT: the whole lane is wrapped so ANY error (a throwing prepare, reconcile, git
+// adapter, or fs read) is caught and logged per-client — it must NEVER throw out of the
+// tick, or a broken schedule sync would take down the drain/ship/site lanes for The O and
+// Eats. `prepare(clientId, site)` returns { git, io, live, config } and is injected so the
+// decision logic is unit-tested without fs/git/network.
+export async function runScheduleSync({ cfg = {}, all = {}, prepare, now = new Date(), log = console.error }) {
+  const summary = { deployed: 0, unchanged: 0, skipped: 0, failed: 0 };
+  const sites = (cfg && cfg.sites) || {};
+  const bookings = all.bookings || [];
+  const vendors = all.vendors || [];
+
+  for (const clientId of Object.keys(sites)) {
+    const site = sites[clientId];
+    const sched = site && site.schedule;
+    if (!sched || !sched.enabled) continue; // lane opt-in per client
+
+    try {
+      const clientBookings = bookings.filter((b) => b && b.clientId === clientId);
+      const clientVendors = vendors.filter((v) => v && v.clientId === clientId);
+
+      // Empty-schedule safety guard: never let an empty backend blow away a real
+      // (non-empty) site schedule. Read the current file THROUGH the same io the
+      // reconcile would use so tests and prod share one code path.
+      const built = buildSchedule(clientBookings, clientVendors, { now });
+      const prep = await prepare(clientId, site);
+      const scheduleRel = (sched && sched.scheduleFile) || "src/content/schedule.json";
+      if (built.length === 0) {
+        let cur = null;
+        try { cur = await prep.io.readFile(scheduleRel); } catch { cur = null; }
+        const curTrimmed = (cur || "").trim();
+        const curIsNonEmpty = curTrimmed && curTrimmed !== "[]";
+        if (curIsNonEmpty) {
+          summary.skipped += 1;
+          log(new Date().toISOString(), `schedule-sync[${clientId}]: backend has no bookings but site schedule.json is non-empty — SKIP (bootstrap schedule preserved)`);
+          continue;
+        }
+      }
+
+      const res = await reconcileSchedule({
+        fetchState: async () => ({ bookings: clientBookings, vendors: clientVendors }),
+        git: prep.git,
+        io: prep.io,
+        live: prep.live,
+        config: prep.config || sched,
+        now,
+      });
+
+      if (res && res.ok && res.changed) summary.deployed += 1;
+      else if (res && res.ok && res.changed === false) summary.unchanged += 1;
+      else {
+        summary.failed += 1;
+        log(new Date().toISOString(), `schedule-sync[${clientId}]: not deployed — ${res && (res.reason || (res.skipped ? "guard skipped" : "unknown"))}`);
+      }
+    } catch (e) {
+      summary.failed += 1;
+      log(new Date().toISOString(), `schedule-sync[${clientId}]: FAILED (caught, tick continues) — ${e && e.message ? e.message : String(e)}`);
+    }
+  }
+  return summary;
 }
 
 // Real drainer: write the job brief, spawn one headless Claude that processes it
@@ -396,6 +489,21 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       siteShipper = makeSiteShipper({ apiUpdate, notifier, prepare: prepareSite });
     }
 
+    // Schedule-sync lane — wired only when at least one site has schedule.enabled
+    // (dormant otherwise). It reuses the same site dir/liveUrl as the deploy lane, and
+    // constructs the real git/io/live per client exactly like the site lane above, but
+    // with schedule-sync's makeScheduleIO (direct on-disk read/apply of schedule.json).
+    let scheduleSync = null;
+    if (cfg.sites && Object.values(cfg.sites).some((s) => s && s.schedule && s.schedule.enabled)) {
+      const prepareScheduleSite = async (clientId, site) => ({
+        git: makeRepoGit(site.dir),
+        io: makeScheduleIO(site.dir),
+        live: makeLive(site.liveUrl),
+        config: site.schedule,
+      });
+      scheduleSync = ({ all }) => runScheduleSync({ cfg, all, prepare: prepareScheduleSite });
+    }
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
@@ -403,6 +511,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       drainer: spawnClaudeDrain({ claudeBin: cfg.claudeBin || "claude", model: cfg.model, oauthToken: cfg.claudeOauthToken, timeoutMs: cfg.drainTimeoutMs ?? 10 * 60 * 1000 }),
       shipper: makeShipper({ fetchIntegrations: () => postiz.listIntegrations(), postiz, apiUpdate, notifier }),
       siteShipper,
+      scheduleSync,
       autoEvents,
       notifier,
       digestHour: cfg.digestHour ?? 8,

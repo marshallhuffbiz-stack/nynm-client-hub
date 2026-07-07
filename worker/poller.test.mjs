@@ -4,7 +4,7 @@ import { mkdtemp, writeFile, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "../mock-server/server.mjs";
-import { runOnce, preflightDisk, isLiveProcess, drainArgs, spawnClaudeDrain } from "./poller.mjs";
+import { runOnce, preflightDisk, isLiveProcess, drainArgs, spawnClaudeDrain, runScheduleSync } from "./poller.mjs";
 import { apiUpdate } from "./writeback.mjs";
 
 let srv, base, dir;
@@ -297,6 +297,39 @@ test("submitRequest is idempotent on clientRequestId (no duplicate on a retry)",
   assert.equal(r1.id, r2.id); // same row, not a new one
   const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
   assert.equal(all.requests.filter((x) => x.meta && x.meta.clientRequestId === reqId).length, 1);
+});
+
+test("runOnce runs the schedule-sync lane with the ALREADY-FETCHED all payload (no second fetch)", async () => {
+  let seenAll = null;
+  const scheduleSync = async ({ all }) => { seenAll = all; return { deployed: 1, unchanged: 0, skipped: 0, failed: 0 }; };
+  const res = await runOnce({
+    apiBase: base, adminToken: "A",
+    drainer: async () => ({ drafted: 0 }),
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    scheduleSync,
+    getLastDigest: async () => new Date().toISOString(), setLastDigest: async () => {}, now: new Date(),
+  });
+  assert.ok(seenAll, "scheduleSync received the tick's all payload");
+  assert.ok(Array.isArray(seenAll.requests), "it's the real admin payload (has requests[])");
+  assert.equal(res.scheduleDeployed, 1, "schedule deploy count surfaced in the tick summary");
+});
+
+test("runOnce FAIL-SOFT: a throwing schedule-sync lane never breaks the tick (drain/ship still run)", async () => {
+  const scheduleSync = async () => { throw new Error("schedule lane exploded"); };
+  let drained = false;
+  const drainer = async () => { drained = true; return { drafted: 0 }; };
+  let res;
+  await assert.doesNotReject(async () => {
+    res = await runOnce({
+      apiBase: base, adminToken: "A",
+      drainer,
+      notifier: { async notifyNew() {}, async notifyDigest() {} },
+      scheduleSync,
+      getLastDigest: async () => new Date().toISOString(), setLastDigest: async () => {}, now: new Date(),
+    });
+  });
+  assert.ok(res, "runOnce returned normally despite the schedule lane throwing");
+  assert.equal(res.scheduleDeployed, 0, "no schedule deploy on the failed lane");
 });
 
 test("runOnce routes an approved website request to the siteShipper, never the drain", async () => {

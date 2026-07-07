@@ -7,6 +7,35 @@
 // Everything outward (backend read, git, file IO, live verify) is injected so the
 // orchestration is unit-tested without touching a real repo or a live service.
 import { etIso, etOffset, slugify } from "./events-auto.mjs";
+import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { join, dirname } from "node:path";
+
+// Real file-IO adapter bound to a site working dir, matching the surface reconcile()
+// injects: readFile(rel) → current text or null (absent), apply(staged) → writes each
+// {rel,content} and reports whether the repo content actually changed (idempotency
+// signal so a re-run can't create an empty commit). This is the schedule-sync analogue
+// of site-apply's makeFilesIO, but it reads the current on-disk content directly (no
+// scratch dir) because reconcile builds the staged content itself.
+export function makeScheduleIO(siteDir) {
+  const readRel = async (rel) => {
+    try { return await readFile(join(siteDir, rel), "utf8"); } catch { return null; }
+  };
+  return {
+    readFile: readRel,
+    apply: async (staged) => {
+      let changed = false;
+      for (const f of staged) {
+        const cur = await readRel(f.rel);
+        if (cur !== f.content) {
+          await mkdir(dirname(join(siteDir, f.rel)), { recursive: true });
+          await writeFile(join(siteDir, f.rel), f.content);
+          changed = true;
+        }
+      }
+      return { changed };
+    },
+  };
+}
 
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
