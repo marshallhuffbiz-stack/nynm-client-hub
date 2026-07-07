@@ -1175,11 +1175,13 @@ function applyData(data) {
 
 /* ---------- food trucks: gating + surface sync ---------- */
 
-// The Food Trucks surface exists ONLY when the payload says this client has the
-// feature. Absent flag -> the switch stays hidden and the portal is unchanged.
+// The Food Trucks surface exists when the payload flags the feature, OR the client
+// is in the allowlist below. The production Sheet backend has no `features` column,
+// so the stored flag can't round-trip — the allowlist is the reliable prod gate.
+const FOOD_TRUCK_CLIENT_IDS = new Set(["eats-on-601"]);
 function applyFoodTrucks(data) {
   const client = (data && data.client) || {};
-  const enabled = !!(client.features && client.features.foodTrucks === true);
+  const enabled = !!(client.features && client.features.foodTrucks === true) || FOOD_TRUCK_CLIENT_IDS.has(client.clientId);
   foodTrucksEnabled = enabled;
 
   if (!enabled) {

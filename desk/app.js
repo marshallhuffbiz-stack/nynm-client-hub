@@ -1179,8 +1179,9 @@ const VENDOR_PRICES = ["$", "$$", "$$$"];
 // Clients that get the Food Trucks tab: those with features.foodTrucks. If none
 // are flagged (older data), fall back to any client that already has vendors so
 // the tab is never uselessly empty.
+const FOOD_TRUCK_CLIENT_IDS = new Set(["eats-on-601"]);
 function truckClientIds() {
-  const flagged = state.clients.filter((c) => c.features && c.features.foodTrucks).map((c) => c.clientId);
+  const flagged = state.clients.filter((c) => (c.features && c.features.foodTrucks) || FOOD_TRUCK_CLIENT_IDS.has(c.clientId)).map((c) => c.clientId);
   if (flagged.length) return flagged;
   const withVendors = [...new Set(state.vendors.map((v) => v.clientId))].filter((id) => state.clientById[id]);
   return withVendors;
