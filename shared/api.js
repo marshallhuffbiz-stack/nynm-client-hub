@@ -48,8 +48,10 @@ export const deskApi = (adminToken) => ({
   remove: (id) => http("POST", "", { admin: adminToken, action: "deleteRequest", id }),
   message: (id, text) => http("POST", "", { admin: adminToken, action: "postMessage", id, text }),
   // Food Trucks (admin token). deleteBooking takes { id } or { seriesId }.
-  upsertVendor: (vendor) => http("POST", "", { admin: adminToken, action: "upsertVendor", vendor }),
-  addBookings: (bookings, seriesId) => http("POST", "", { admin: adminToken, action: "addBookings", bookings, seriesId }),
+  // Admin writes need the tenant as a TOP-LEVEL clientId (forcedClientId_ reads body.clientId
+  // for admin tokens; per-item clientId is ignored) — forward it from the payload objects.
+  upsertVendor: (vendor) => http("POST", "", { admin: adminToken, action: "upsertVendor", vendor, clientId: vendor && vendor.clientId }),
+  addBookings: (bookings, seriesId) => http("POST", "", { admin: adminToken, action: "addBookings", bookings, seriesId, clientId: bookings && bookings[0] && bookings[0].clientId }),
   updateBooking: (id, patch) => http("POST", "", { admin: adminToken, action: "updateBooking", id, patch }),
   deleteBooking: (sel) => http("POST", "", { admin: adminToken, action: "deleteBooking", ...(sel || {}) }),
 });

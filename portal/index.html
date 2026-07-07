@@ -84,6 +84,17 @@
 
     <!-- Main app -->
     <div id="view-app" class="hidden">
+      <!-- Top-level surface switch (Requests | Food Trucks). Hidden until the
+           payload confirms this client has the foodTrucks feature; otherwise the
+           portal looks exactly as it did before. -->
+      <div class="seg surface-seg hidden" id="surface-chips" role="tablist" aria-label="Section" style="margin-bottom:18px">
+        <span class="seg-thumb" aria-hidden="true"></span>
+        <button type="button" class="seg-btn" data-surface="requests" role="tab" aria-selected="true">Requests</button>
+        <button type="button" class="seg-btn" data-surface="trucks" role="tab" aria-selected="false">Food Trucks</button>
+      </div>
+
+      <!-- ===================== REQUESTS surface ===================== -->
+      <div id="surface-requests">
       <!-- New request -->
       <section class="card">
         <h2>New request</h2>
@@ -179,8 +190,121 @@
       <!-- Upcoming events -->
       <div class="section-label">Upcoming events</div>
       <div id="events-list"></div>
+      </div><!-- /#surface-requests -->
+
+      <!-- ===================== FOOD TRUCKS surface ===================== -->
+      <div id="surface-trucks" class="hidden">
+        <!-- Month calendar -->
+        <section class="card cal-card">
+          <div class="cal-head">
+            <button type="button" class="cal-nav" id="cal-prev" aria-label="Previous month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 L8 12 L15 19" /></svg>
+            </button>
+            <h2 id="cal-title" aria-live="polite">Month</h2>
+            <button type="button" class="cal-nav" id="cal-next" aria-label="Next month">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5 L16 12 L9 19" /></svg>
+            </button>
+          </div>
+          <div class="cal-dow" aria-hidden="true">
+            <span>S</span><span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span>
+          </div>
+          <div class="cal-grid" id="cal-grid" role="grid" aria-label="Month calendar"></div>
+        </section>
+
+        <!-- Day detail (revealed when a day is tapped) -->
+        <div id="day-detail" class="hidden">
+          <div class="section-label" id="day-detail-label">Day</div>
+
+          <!-- Trucks booked this day -->
+          <div id="day-trucks"></div>
+
+          <!-- Add a truck -->
+          <section class="card">
+            <h2>Add a truck</h2>
+            <p class="muted small">Search your trucks, or add a new one.</p>
+            <div class="stack" style="margin-top:14px">
+              <div class="truck-search">
+                <input id="truck-search" type="text" autocomplete="off" placeholder="Search trucks…"
+                       role="combobox" aria-expanded="false" aria-controls="truck-results" aria-autocomplete="list" />
+                <div id="truck-results" class="truck-results hidden" role="listbox" aria-label="Matching trucks"></div>
+              </div>
+            </div>
+          </section>
+
+          <!-- Add-a-new-truck mini form (revealed from the "+ Add a new truck" row) -->
+          <form id="new-truck-form" class="card stack hidden" autocomplete="off">
+            <h2>New truck</h2>
+            <div>
+              <label for="nt-name">Name</label>
+              <input id="nt-name" type="text" placeholder="e.g. Island Boys Food Truck" />
+            </div>
+            <div class="row" style="gap:12px; align-items:flex-start">
+              <div style="flex:1; min-width:0">
+                <label for="nt-category">Category</label>
+                <input id="nt-category" type="text" list="truck-categories" placeholder="e.g. TACOS" />
+                <datalist id="truck-categories"></datalist>
+              </div>
+              <div style="width:96px; flex:none">
+                <label for="nt-price">Price</label>
+                <select id="nt-price">
+                  <option value="$">$</option>
+                  <option value="$$" selected>$$</option>
+                  <option value="$$$">$$$</option>
+                </select>
+              </div>
+            </div>
+            <div>
+              <label for="nt-tagline">Tagline <span class="muted">(optional)</span></label>
+              <input id="nt-tagline" type="text" placeholder="e.g. Street tacos and churros" />
+            </div>
+            <div class="row wrap-row" style="gap:8px">
+              <button type="submit" class="btn primary" id="nt-save">Add &amp; book it</button>
+              <button type="button" class="btn" id="nt-cancel">Cancel</button>
+            </div>
+          </form>
+        </div>
+      </div><!-- /#surface-trucks -->
     </div>
   </main>
+
+  <!-- Booking editor sheet (time + note), shared by add-with-hours and edit. -->
+  <div id="booking-sheet" class="sheet-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="bk-sheet-title">
+    <form class="sheet" id="booking-form" autocomplete="off">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <h2 id="bk-sheet-title">Truck</h2>
+      <p class="muted small" id="bk-sheet-when"></p>
+      <div class="row" style="gap:12px; align-items:flex-start; margin-top:14px">
+        <div style="flex:1; min-width:0">
+          <label for="bk-start">Start</label>
+          <div class="field-icon">
+            <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.4 V12 L15.2 14" /></svg>
+            <input id="bk-start" type="time" />
+          </div>
+        </div>
+        <div style="flex:1; min-width:0">
+          <label for="bk-end">End</label>
+          <div class="field-icon">
+            <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" /><path d="M12 7.4 V12 L15.2 14" /></svg>
+            <input id="bk-end" type="time" />
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:12px">
+        <label for="bk-note">Note <span class="muted">(optional)</span></label>
+        <input id="bk-note" type="text" placeholder="e.g. first visit! · tacos + churros" />
+      </div>
+      <!-- Repeat helper — only shown when adding a fresh booking, not when editing. -->
+      <label class="repeat-row hidden" id="bk-repeat-row" for="bk-repeat">
+        <input id="bk-repeat" type="checkbox" />
+        <span>Repeat weekly through end of month</span>
+      </label>
+      <p id="bk-error" class="small hidden" style="color:var(--red);margin-top:8px"></p>
+      <div class="row wrap-row" style="gap:8px; margin-top:16px">
+        <button type="submit" class="btn primary" id="bk-save">Book it</button>
+        <button type="button" class="btn" id="bk-cancel">Cancel</button>
+      </div>
+    </form>
+  </div>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
