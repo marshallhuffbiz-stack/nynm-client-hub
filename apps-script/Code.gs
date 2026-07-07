@@ -556,7 +556,8 @@ function publicClient_(client) {
   return {
     clientId: client.clientId,
     name: client.name,
-    hasPin: !!(client.pin && String(client.pin).length)
+    hasPin: !!(client.pin && String(client.pin).length),
+    features: client.features || {}
   };
 }
 

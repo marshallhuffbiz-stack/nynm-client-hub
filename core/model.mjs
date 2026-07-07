@@ -206,6 +206,7 @@ export function publicClient(client = {}) {
     clientId: client.clientId,
     name: client.name,
     hasPin: !!(client.pin && String(client.pin).length),
+    features: client.features || {},
   };
 }
 
