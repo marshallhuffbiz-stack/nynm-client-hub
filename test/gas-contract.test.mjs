@@ -366,6 +366,107 @@ test("time/date cells Sheets coerced into Date objects still read back as HH:MM 
   assert.match(req.description, /7:00 PM–10:00 PM/);
 });
 
+/* ============================ Food Trucks: vendors + bookings ============================ */
+
+test("upsertVendor creates a slug-id vendor visible in client + admin doGet payloads", () => {
+  const h = createHarness();
+  const r = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Island Boys Food Truck", category: "CARIBBEAN", price: "$$", tagline: "island plates" } });
+  assert.equal(r.status, 200);
+  assert.equal(r.vendorId, "island-boys-food-truck");
+  const cv = h.get({ client: TOK_O });
+  assert.ok(Array.isArray(cv.vendors));
+  const v = cv.vendors.find((x) => x.id === "island-boys-food-truck");
+  assert.equal(v.name, "Island Boys Food Truck");
+  assert.equal(v.category, "CARIBBEAN");
+  assert.equal(v.price, "$$");
+  assert.equal(v.clientId, "the-o");
+  assert.equal(v.active, true);
+  const av = h.get({ admin: ADMIN });
+  assert.ok(Array.isArray(av.vendors) && Array.isArray(av.bookings));
+  assert.ok(av.vendors.some((x) => x.id === "island-boys-food-truck"));
+});
+
+test("upsertVendor with explicit id updates in place; bad price 400; inactive hidden from client", () => {
+  const h = createHarness();
+  const c = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Smokin BBQ", category: "BBQ", price: "$$" } });
+  const id = c.vendorId;
+  const u = h.post({ c: TOK_O, action: "upsertVendor", vendor: { id, name: "Smokin BBQ Chateau", category: "BBQ", price: "$$$" } });
+  assert.equal(u.vendorId, id);
+  const admin = h.get({ admin: ADMIN });
+  assert.equal(admin.vendors.filter((x) => x.id === id).length, 1);
+  assert.equal(admin.vendors.find((x) => x.id === id).name, "Smokin BBQ Chateau");
+  assert.equal(h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Nope", category: "X", price: "cheap" } }).status, 400);
+  h.post({ c: TOK_O, action: "upsertVendor", vendor: { id, name: "Smokin BBQ Chateau", category: "BBQ", price: "$$$", active: false } });
+  assert.equal(h.get({ client: TOK_O }).vendors.find((x) => x.id === id), undefined);
+  assert.equal(h.get({ admin: ADMIN }).vendors.find((x) => x.id === id).active, false);
+});
+
+test("addBookings batch-inserts with time defaults + vendorName snapshot; text-forced date/time round-trip", () => {
+  const h = createHarness();
+  const ven = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Taco Truck", category: "TACOS", price: "$$" } });
+  const vendorId = ven.vendorId;
+  const r = h.post({ c: TOK_O, action: "addBookings", bookings: [
+    { vendorId, date: "2026-07-11" },
+    { vendorId, date: "2026-07-18", startTime: "11:00", endTime: "19:00", note: "first visit!" },
+  ] });
+  assert.equal(r.status, 200);
+  assert.equal(r.ids.length, 2);
+  const cv = h.get({ client: TOK_O });
+  assert.equal(cv.bookings.length, 2);
+  const b0 = cv.bookings.find((b) => b.date === "2026-07-11");
+  assert.equal(b0.startTime, "09:00");
+  assert.equal(b0.endTime, "17:00");
+  assert.equal(b0.vendorName, "Taco Truck");
+  assert.equal(b0.status, "scheduled");
+  assert.equal(b0.clientId, "the-o");
+  const b1 = cv.bookings.find((b) => b.date === "2026-07-18");
+  assert.equal(b1.startTime, "11:00");
+  assert.equal(b1.note, "first visit!");
+});
+
+test("addBookings rejects the whole batch on any invalid entry", () => {
+  const h = createHarness();
+  const vendorId = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Churro Cart", category: "DESSERTS", price: "$" } }).vendorId;
+  assert.equal(h.post({ c: TOK_O, action: "addBookings", bookings: [{ vendorId: "ghost", date: "2026-07-11" }] }).status, 400);
+  assert.equal(h.post({ c: TOK_O, action: "addBookings", bookings: [{ vendorId, date: "2026-07-11", startTime: "25:00" }] }).status, 400);
+  assert.equal(h.post({ c: TOK_O, action: "addBookings", bookings: [{ vendorId, date: "2026-07-11", startTime: "17:00", endTime: "09:00" }] }).status, 400);
+  assert.equal(h.post({ c: TOK_O, action: "addBookings", bookings: [{ vendorId, date: "July 11" }] }).status, 400);
+  assert.equal(h.get({ client: TOK_O }).bookings.length, 0);
+});
+
+test("addBookings groups a series; updateBooking + cancel; deleteBooking by id and by seriesId", () => {
+  const h = createHarness();
+  const vendorId = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Weekly Truck", category: "TACOS", price: "$" } }).vendorId;
+  const series = h.post({ c: TOK_O, action: "addBookings", seriesId: "series-abc", bookings: [
+    { vendorId, date: "2026-07-07" }, { vendorId, date: "2026-07-14" }, { vendorId, date: "2026-07-21" },
+  ] });
+  assert.equal(series.ids.length, 3);
+  assert.equal(h.get({ client: TOK_O }).bookings.filter((b) => b.seriesId === "series-abc").length, 3);
+
+  const single = h.post({ c: TOK_O, action: "addBookings", bookings: [{ vendorId, date: "2026-08-01" }] });
+  const id = single.ids[0];
+  const upd = h.post({ c: TOK_O, action: "updateBooking", id, patch: { startTime: "12:00", note: "later" } });
+  assert.equal(upd.status, 200);
+  const row = h.get({ client: TOK_O }).bookings.find((b) => b.id === id);
+  assert.equal(row.startTime, "12:00");
+  assert.equal(row.note, "later");
+  h.post({ c: TOK_O, action: "updateBooking", id, patch: { status: "cancelled" } });
+  assert.equal(h.get({ client: TOK_O }).bookings.find((b) => b.id === id), undefined);
+  assert.equal(h.get({ admin: ADMIN }).bookings.find((b) => b.id === id).status, "cancelled");
+  assert.equal(h.post({ c: TOK_O, action: "updateBooking", id: "bkg_nope", patch: {} }).status, 404);
+
+  // delete by id
+  const del = h.post({ c: TOK_O, action: "deleteBooking", id });
+  assert.equal(del.status, 200);
+  assert.equal(h.get({ admin: ADMIN }).bookings.find((b) => b.id === id), undefined);
+  assert.equal(h.post({ c: TOK_O, action: "deleteBooking", id: "bkg_nope" }).status, 404);
+  // delete the whole series
+  const delSeries = h.post({ c: TOK_O, action: "deleteBooking", seriesId: "series-abc" });
+  assert.equal(delSeries.status, 200);
+  assert.equal(delSeries.deleted, 3);
+  assert.equal(h.get({ admin: ADMIN }).bookings.filter((b) => b.seriesId === "series-abc").length, 0);
+});
+
 /* ============================ harness self-check ============================ */
 
 test("harness is strict: an unstubbed GAS API fails loudly, never silently", () => {

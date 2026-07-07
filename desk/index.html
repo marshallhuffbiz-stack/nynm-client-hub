@@ -69,6 +69,9 @@
         <button class="tab" data-view="events" role="tab" aria-selected="false">
           Events <span class="tab-count" id="count-events"></span>
         </button>
+        <button class="tab" data-view="trucks" role="tab" aria-selected="false">
+          Food Trucks <span class="tab-count" id="count-trucks"></span>
+        </button>
         <button class="tab" data-view="history" role="tab" aria-selected="false">
           History <span class="tab-count" id="count-history"></span>
         </button>
@@ -88,6 +91,15 @@
       <!-- Events view -->
       <section id="panel-events" class="panel hidden" role="tabpanel">
         <div id="events-list"></div>
+      </section>
+
+      <!-- Food Trucks view: a month calendar of truck bookings, scoped to a
+           food-truck client (default Eats). Marshall can add / edit / cancel a
+           day's trucks here the same way the client does from the portal — for
+           when he schedules on their behalf. The monthly schedule graphic is
+           still approved through the normal Requests ready→approve flow. -->
+      <section id="panel-trucks" class="panel hidden" role="tabpanel">
+        <div id="trucks-body"></div>
       </section>
 
       <!-- History view: one searchable timeline of everything the worker and

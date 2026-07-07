@@ -24,6 +24,8 @@
 var SHEET_CLIENTS = "Clients";
 var SHEET_REQUESTS = "Requests";
 var SHEET_EVENTS = "Events";
+var SHEET_VENDORS = "Vendors";
+var SHEET_BOOKINGS = "Bookings";
 
 var COLS_CLIENTS = [
   "clientId", "name", "token", "pin", "brandSlug",
@@ -38,17 +40,29 @@ var COLS_EVENTS = [
   "eventId", "clientId", "title", "date", "description",
   "promoted", "requestId", "createdAt", "updatedAt", "time", "endTime"
 ];
+var COLS_VENDORS = [
+  "id", "clientId", "name", "category", "price",
+  "tagline", "active", "createdAt", "updatedAt"
+];
+var COLS_BOOKINGS = [
+  "id", "clientId", "vendorId", "vendorName", "date",
+  "startTime", "endTime", "note", "seriesId", "status", "createdAt", "updatedAt"
+];
 
 // Per-tab: which columns are JSON-encoded in the cell, and which are booleans.
 var JSON_FIELDS = {
   Clients: ["postizChannels"],
   Requests: ["attachments", "draft", "meta"],
-  Events: []
+  Events: [],
+  Vendors: [],
+  Bookings: []
 };
 var BOOL_FIELDS = {
   Clients: ["active"],
   Requests: [],
-  Events: ["promoted"]
+  Events: ["promoted"],
+  Vendors: ["active"],
+  Bookings: []
 };
 
 // [V9] Per-tab: columns that MUST stay plain text in the cell. Google Sheets
@@ -59,7 +73,9 @@ var BOOL_FIELDS = {
 var TEXT_FIELDS = {
   Clients: [],
   Requests: [],
-  Events: ["date", "time", "endTime"]
+  Events: ["date", "time", "endTime"],
+  Vendors: [],
+  Bookings: ["date", "startTime", "endTime"]
 };
 
 // Mirror of core/model.mjs REQUEST_TYPES.
@@ -148,6 +164,8 @@ function colsFor_(sheetName) {
   if (sheetName === SHEET_CLIENTS) return COLS_CLIENTS;
   if (sheetName === SHEET_REQUESTS) return COLS_REQUESTS;
   if (sheetName === SHEET_EVENTS) return COLS_EVENTS;
+  if (sheetName === SHEET_VENDORS) return COLS_VENDORS;
+  if (sheetName === SHEET_BOOKINGS) return COLS_BOOKINGS;
   throw new Error("unknown sheet " + sheetName);
 }
 
@@ -376,6 +394,79 @@ function validateEventInput_(input) {
   };
 }
 
+var VENDOR_PRICES = ["$", "$$", "$$$"];
+
+// Stable url-safe slug from a display name — mirrors slugId() in core/model.mjs.
+function slugId_(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+}
+
+// mirror validateVendorInput() in core/model.mjs.
+function validateVendorInput_(input) {
+  var errors = [];
+  if (!input || typeof input !== "object") return { ok: false, errors: ["missing input"] };
+  var clientId = String(input.clientId || "").trim();
+  if (!clientId) errors.push("clientId required");
+  var name = String(input.name || "").trim();
+  if (!name) errors.push("name required");
+  var category = String(input.category || "").trim();
+  if (!category) errors.push("category required");
+  var price = String(input.price || "").trim();
+  if (VENDOR_PRICES.indexOf(price) < 0) errors.push("price must be one of " + VENDOR_PRICES.join(", "));
+  if (errors.length) return { ok: false, errors: errors };
+  var id = String(input.id || "").trim() || slugId_(name);
+  var active = (input.active == null) ? true : !!input.active;
+  return {
+    ok: true,
+    errors: [],
+    value: { id: id, clientId: clientId, name: name, category: category, price: price, tagline: String(input.tagline || "").trim(), active: active }
+  };
+}
+
+// mirror validateBookingInput() in core/model.mjs. `vendors` is the client's scoped
+// registry; vendorId must resolve to an ACTIVE vendor, whose name is snapshotted.
+function validateBookingInput_(input, vendors) {
+  vendors = vendors || [];
+  var errors = [];
+  if (!input || typeof input !== "object") return { ok: false, errors: ["missing input"] };
+  var clientId = String(input.clientId || "").trim();
+  if (!clientId) errors.push("clientId required");
+  var vendorId = String(input.vendorId || "").trim();
+  var vendor = null;
+  for (var i = 0; i < vendors.length; i++) {
+    if (vendors[i].id === vendorId && vendors[i].clientId === clientId && vendors[i].active !== false) { vendor = vendors[i]; break; }
+  }
+  if (!vendorId) errors.push("vendorId required");
+  else if (!vendor) errors.push("vendorId must resolve to an active vendor");
+  var date = String(input.date || "").trim();
+  if (!isIsoDate_(date)) errors.push("date must be YYYY-MM-DD");
+  var startTime = String(input.startTime || "").trim() || "09:00";
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime)) errors.push("startTime must be HH:MM (24-hour)");
+  var endTime = String(input.endTime || "").trim() || "17:00";
+  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(endTime)) errors.push("endTime must be HH:MM (24-hour)");
+  if (/^([01]\d|2[0-3]):[0-5]\d$/.test(startTime) && /^([01]\d|2[0-3]):[0-5]\d$/.test(endTime) && endTime < startTime) {
+    errors.push("endTime must be >= startTime");
+  }
+  if (errors.length) return { ok: false, errors: errors };
+  return {
+    ok: true,
+    errors: [],
+    value: {
+      clientId: clientId,
+      vendorId: vendorId,
+      vendorName: vendor ? vendor.name : "",
+      date: date,
+      startTime: startTime,
+      endTime: endTime,
+      note: String(input.note || "").trim()
+    }
+  };
+}
+
 // mirror nextStage(): throws on illegal transition; "error" always allowed.
 function nextStage_(current, action) {
   if (action === "error") return "error";
@@ -465,7 +556,8 @@ function publicClient_(client) {
   return {
     clientId: client.clientId,
     name: client.name,
-    hasPin: !!(client.pin && String(client.pin).length)
+    hasPin: !!(client.pin && String(client.pin).length),
+    features: client.features || {}
   };
 }
 
@@ -540,7 +632,9 @@ function doGet(e) {
         ok: true,
         clients: readAll_(SHEET_CLIENTS).map(stripRowMeta_),
         requests: readAll_(SHEET_REQUESTS).map(stripRowMeta_),
-        events: readAll_(SHEET_EVENTS).map(stripRowMeta_)
+        events: readAll_(SHEET_EVENTS).map(stripRowMeta_),
+        vendors: readAll_(SHEET_VENDORS).map(stripRowMeta_),
+        bookings: readAll_(SHEET_BOOKINGS).map(stripRowMeta_)
       });
     }
 
@@ -556,11 +650,15 @@ function doGet(e) {
       }
       var reqs = readAll_(SHEET_REQUESTS).filter(function (r) { return r.clientId === client.clientId; });
       var evs = readAll_(SHEET_EVENTS).filter(function (ev) { return ev.clientId === client.clientId; });
+      var vens = readAll_(SHEET_VENDORS).filter(function (v) { return v.clientId === client.clientId && v.active !== false; });
+      var bks = readAll_(SHEET_BOOKINGS).filter(function (b) { return b.clientId === client.clientId && b.status !== "cancelled"; });
       return json_(200, {
         ok: true,
         client: publicClient_(client),
         requests: reqs.map(stripRowMeta_),
-        events: evs.map(stripRowMeta_)
+        events: evs.map(stripRowMeta_),
+        vendors: vens.map(stripRowMeta_),
+        bookings: bks.map(stripRowMeta_)
       });
     }
 
@@ -609,7 +707,7 @@ function doPost(e) {
     if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].indexOf(action) >= 0 && !adminOk) {
       return json_(403, { ok: false, error: "admin required" });
     }
-    if (["submitRequest", "addEvent", "uploadAttachment", "postMessage"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
+    if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
       return json_(403, { ok: false, error: "client link required" });
     }
 
@@ -648,6 +746,18 @@ function doPost(e) {
           break;
         case "postMessage":
           result = handlePostMessage_(body, clientForAuth);
+          break;
+        case "upsertVendor":
+          result = handleUpsertVendor_(body, clientForAuth);
+          break;
+        case "addBookings":
+          result = handleAddBookings_(body, clientForAuth);
+          break;
+        case "updateBooking":
+          result = handleUpdateBooking_(body, clientForAuth);
+          break;
+        case "deleteBooking":
+          result = handleDeleteBooking_(body, clientForAuth);
           break;
         default:
           result = { code: 400, obj: { ok: false, error: "unknown action" } };
@@ -956,13 +1066,145 @@ function handleUpsertClient_(body) {
   return { code: 200, obj: { ok: true, clientId: merged.clientId, token: merged.token } };
 }
 
+/* ============================ Food-truck action handlers ============================ */
+
+// Tenant FORCED from the auth'd client token; a body clientId is honored only for
+// admin (mirrors handleSubmitRequest_ / handleAddEvent_).
+function forcedClientId_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
+  return adminOk ? (body.clientId || (client && client.clientId)) : (client && client.clientId);
+}
+
+// upsertVendor: add or update a registry row. Id omitted -> slug from name. Returns vendorId.
+function handleUpsertVendor_(body, client) {
+  var input = {};
+  var k;
+  for (k in (body.vendor || {})) { if (body.vendor.hasOwnProperty(k)) input[k] = body.vendor[k]; }
+  input.clientId = forcedClientId_(body, client);
+  var v = validateVendorInput_(input);
+  if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
+
+  var vendors = readAll_(SHEET_VENDORS);
+  var existing = null;
+  for (var i = 0; i < vendors.length; i++) {
+    if (vendors[i].id === v.value.id && vendors[i].clientId === v.value.clientId) { existing = vendors[i]; break; }
+  }
+  if (existing) {
+    var merged = {};
+    for (k in existing) { if (existing.hasOwnProperty(k) && k !== "__row") merged[k] = existing[k]; }
+    for (k in v.value) { if (v.value.hasOwnProperty(k)) merged[k] = v.value[k]; }
+    merged.updatedAt = now_();
+    writeRow_(SHEET_VENDORS, existing.__row, merged);
+  } else {
+    var rec = {
+      id: v.value.id, clientId: v.value.clientId, name: v.value.name, category: v.value.category,
+      price: v.value.price, tagline: v.value.tagline, active: v.value.active,
+      createdAt: now_(), updatedAt: now_()
+    };
+    appendRow_(SHEET_VENDORS, rec);
+  }
+  return { code: 200, obj: { ok: true, vendorId: v.value.id } };
+}
+
+// addBookings: batch insert (one round-trip for repeat-weekly). Validates EACH against
+// the client's active registry; nothing is inserted unless every booking validates.
+function handleAddBookings_(body, client) {
+  var clientId = forcedClientId_(body, client);
+  var list = isArray_(body.bookings) ? body.bookings : [];
+  var scopedVendors = readAll_(SHEET_VENDORS).filter(function (x) { return x.clientId === clientId; });
+  var seriesId = String(body.seriesId || "").trim();
+
+  var validated = [];
+  for (var i = 0; i < list.length; i++) {
+    var input = {};
+    var k;
+    for (k in list[i]) { if (list[i].hasOwnProperty(k)) input[k] = list[i][k]; }
+    input.clientId = clientId;
+    var vb = validateBookingInput_(input, scopedVendors);
+    if (!vb.ok) return { code: 400, obj: { ok: false, errors: vb.errors } };
+    validated.push(vb.value);
+  }
+
+  var ids = [];
+  for (var j = 0; j < validated.length; j++) {
+    var value = validated[j];
+    var id = genId_("bkg");
+    ids.push(id);
+    appendRow_(SHEET_BOOKINGS, {
+      id: id, clientId: value.clientId, vendorId: value.vendorId, vendorName: value.vendorName,
+      date: value.date, startTime: value.startTime, endTime: value.endTime, note: value.note,
+      seriesId: seriesId, status: "scheduled", createdAt: now_(), updatedAt: now_()
+    });
+  }
+  return { code: 200, obj: { ok: true, ids: ids } };
+}
+
+// updateBooking: merge a time/note/status patch (identity fields immutable), stamp updatedAt.
+function handleUpdateBooking_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
+  var clientId = forcedClientId_(body, client);
+  var bookings = readAll_(SHEET_BOOKINGS);
+  var rec = null;
+  for (var i = 0; i < bookings.length; i++) {
+    if (bookings[i].id === body.id && (adminOk || bookings[i].clientId === clientId)) { rec = bookings[i]; break; }
+  }
+  if (!rec) return { code: 404, obj: { ok: false, error: "not found" } };
+
+  var patch = {};
+  var k;
+  for (k in (body.patch || {})) { if (body.patch.hasOwnProperty(k)) patch[k] = body.patch[k]; }
+  // Identity fields are immutable through a patch (only time/note/status).
+  delete patch.id;
+  delete patch.clientId;
+  delete patch.vendorId;
+  delete patch.vendorName;
+  delete patch.createdAt;
+  delete patch.seriesId;
+  delete patch.__row;
+
+  var merged = mergePatch_(rec, patch, now_());
+  writeRow_(SHEET_BOOKINGS, rec.__row, merged);
+  return { code: 200, obj: { ok: true, booking: stripRowMeta_(merged) } };
+}
+
+// deleteBooking: remove one booking by id, OR the whole series by seriesId.
+function handleDeleteBooking_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
+  var clientId = forcedClientId_(body, client);
+  var sheet = getOrCreateSheet_(SHEET_BOOKINGS, colsFor_(SHEET_BOOKINGS));
+  var bookings = readAll_(SHEET_BOOKINGS);
+  var seriesId = String(body.seriesId || "").trim();
+
+  if (seriesId) {
+    // Collect matching rows, then delete bottom-up so row indices stay valid.
+    var rows = [];
+    for (var i = 0; i < bookings.length; i++) {
+      if (bookings[i].seriesId === seriesId && (adminOk || bookings[i].clientId === clientId)) rows.push(bookings[i].__row);
+    }
+    if (rows.length === 0) return { code: 404, obj: { ok: false, error: "not found" } };
+    rows.sort(function (a, b) { return b - a; });
+    for (var r = 0; r < rows.length; r++) sheet.deleteRow(rows[r]);
+    return { code: 200, obj: { ok: true, deleted: rows.length } };
+  }
+
+  var rec = null;
+  for (var j = 0; j < bookings.length; j++) {
+    if (bookings[j].id === body.id && (adminOk || bookings[j].clientId === clientId)) { rec = bookings[j]; break; }
+  }
+  if (!rec) return { code: 404, obj: { ok: false, error: "not found" } };
+  sheet.deleteRow(rec.__row);
+  return { code: 200, obj: { ok: true, id: body.id, deleted: 1 } };
+}
+
 /* ============================ setup / seeding / menu ============================ */
 
 function setup() {
-  // 1. Ensure the three tabs + headers exist.
+  // 1. Ensure the tabs + headers exist.
   getOrCreateSheet_(SHEET_CLIENTS, COLS_CLIENTS);
   getOrCreateSheet_(SHEET_REQUESTS, COLS_REQUESTS);
   getOrCreateSheet_(SHEET_EVENTS, COLS_EVENTS);
+  getOrCreateSheet_(SHEET_VENDORS, COLS_VENDORS);
+  getOrCreateSheet_(SHEET_BOOKINGS, COLS_BOOKINGS);
 
   // 2. Generate an admin token if not already set.
   var props = PropertiesService.getScriptProperties();

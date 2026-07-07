@@ -111,6 +111,40 @@ const eventsList = $("events-list");
 const ideasSection = $("ideas-section");
 const ideasList = $("ideas-list");
 
+// --- Food Trucks surface ---
+const surfaceChips = $("surface-chips");
+const surfaceRequests = $("surface-requests");
+const surfaceTrucks = $("surface-trucks");
+const calTitle = $("cal-title");
+const calGrid = $("cal-grid");
+const calPrev = $("cal-prev");
+const calNext = $("cal-next");
+const dayDetail = $("day-detail");
+const dayDetailLabel = $("day-detail-label");
+const dayTrucks = $("day-trucks");
+const truckSearch = $("truck-search");
+const truckResults = $("truck-results");
+const newTruckForm = $("new-truck-form");
+const ntName = $("nt-name");
+const ntCategory = $("nt-category");
+const ntPrice = $("nt-price");
+const ntTagline = $("nt-tagline");
+const ntCancel = $("nt-cancel");
+const truckCategories = $("truck-categories");
+// Booking editor sheet
+const bookingSheet = $("booking-sheet");
+const bookingForm = $("booking-form");
+const bkSheetTitle = $("bk-sheet-title");
+const bkSheetWhen = $("bk-sheet-when");
+const bkStart = $("bk-start");
+const bkEnd = $("bk-end");
+const bkNote = $("bk-note");
+const bkRepeatRow = $("bk-repeat-row");
+const bkRepeat = $("bk-repeat");
+const bkError = $("bk-error");
+const bkSave = $("bk-save");
+const bkCancel = $("bk-cancel");
+
 const toastEl = $("toast");
 
 /* ---------- constants ---------- */
@@ -191,6 +225,17 @@ let currentData = null;
 let lastRenderSig = "";
 // When we last heard fresh data from the server (drives revalidate-on-return).
 let lastLoadedAt = 0;
+
+/* ---------- Food Trucks state ---------- */
+let foodTrucksEnabled = false;      // gated by client.features.foodTrucks
+let currentSurface = "requests";    // "requests" | "trucks"
+let calYear = 0;                    // month currently shown in the calendar
+let calMonth = 0;                   // 0-based
+let selectedDate = "";             // "YYYY-MM-DD" of the open day-detail (or "")
+// The booking editor sheet is reused for both "add" and "edit":
+//   mode "add"  -> { vendorId } : create a booking (repeat helper offered)
+//   mode "edit" -> { id }       : patch an existing booking's time/note
+let sheetCtx = null;
 
 /* ---------- view helpers ---------- */
 
@@ -457,6 +502,252 @@ function renderIdeas(data) {
     </div>`).join("");
 }
 
+/* ================================================================
+   FOOD TRUCKS
+   Month calendar -> day detail -> add/edit/remove truck bookings.
+   Optimistic local paint + reconcile on next load(), mirroring addEvent.
+   ================================================================ */
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+// "09:00" -> "9A", "17:00" -> "5P", "12:30" -> "12:30P" (compact, spec §5 "9A–5P").
+function compactTime(t) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(t || ""));
+  if (!m) return "";
+  let h = Number(m[1]);
+  const min = m[2];
+  const ap = h >= 12 ? "P" : "A";
+  h = h % 12 || 12;
+  return min === "00" ? `${h}${ap}` : `${h}:${min}${ap}`;
+}
+// "09:00"/"17:00" -> "9A–5P"
+function hoursLabel(start, end) {
+  const s = compactTime(start), e = compactTime(end);
+  if (!s && !e) return "";
+  return e ? `${s}–${e}` : s;
+}
+
+// Local YYYY-MM-DD for a given y/m(0-based)/d (no UTC drift).
+function ymd(y, m, d) {
+  return `${y}-${String(m + 1).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+// Scheduled bookings for this client (defensive: server already filters cancelled).
+function activeBookings() {
+  const list = (currentData && Array.isArray(currentData.bookings)) ? currentData.bookings : [];
+  return list.filter((b) => b && b.status !== "cancelled");
+}
+function vendorsList() {
+  const list = (currentData && Array.isArray(currentData.vendors)) ? currentData.vendors : [];
+  return list.filter((v) => v && v.active !== false);
+}
+// Bookings on a given date, name-sorted so the day reads consistently.
+function bookingsOn(dateISO) {
+  return activeBookings()
+    .filter((b) => String(b.date) === dateISO)
+    .sort((a, b) => String(a.vendorName || "").localeCompare(String(b.vendorName || ""))
+      || String(a.startTime || "").localeCompare(String(b.startTime || "")));
+}
+
+/* ---------- surface switch (Requests | Food Trucks) ---------- */
+
+function selectSurface(surface) {
+  currentSurface = surface === "trucks" && foodTrucksEnabled ? "trucks" : "requests";
+  const btns = Array.from(surfaceChips.querySelectorAll(".seg-btn"));
+  let idx = 0;
+  btns.forEach((btn, i) => {
+    const active = btn.dataset.surface === currentSurface;
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+    if (active) idx = i;
+  });
+  const thumb = surfaceChips.querySelector(".seg-thumb");
+  if (thumb && btns.length) {
+    thumb.style.width = `calc((100% - 4px) / ${btns.length})`;
+    thumb.style.transform = `translateX(${idx * 100}%)`;
+  }
+  surfaceRequests.classList.toggle("hidden", currentSurface !== "requests");
+  surfaceTrucks.classList.toggle("hidden", currentSurface !== "trucks");
+  if (currentSurface === "trucks") renderCalendar();
+}
+
+/* ---------- calendar ---------- */
+
+function renderCalendar() {
+  if (!calGrid) return;
+  const counts = {};
+  for (const b of activeBookings()) counts[b.date] = (counts[b.date] || 0) + 1;
+
+  calTitle.textContent = `${MONTH_NAMES[calMonth]} ${calYear}`;
+
+  const firstDow = new Date(calYear, calMonth, 1).getDay();     // 0=Sun
+  const daysInMonth = new Date(calYear, calMonth + 1, 0).getDate();
+  const today = todayISO();
+
+  let cells = "";
+  for (let i = 0; i < firstDow; i++) cells += `<div class="cal-cell blank" role="gridcell" aria-hidden="true"></div>`;
+  for (let d = 1; d <= daysInMonth; d++) {
+    const iso = ymd(calYear, calMonth, d);
+    const n = counts[iso] || 0;
+    const classes = ["cal-cell"];
+    if (iso === today) classes.push("today");
+    if (n > 0) classes.push("has-bookings");
+    if (iso === selectedDate) classes.push("selected");
+    const badge = n > 0 ? `<span class="cal-count">${n}</span>` : "";
+    const aria = `${formatDate(iso)}${n ? `, ${n} truck${n === 1 ? "" : "s"}` : ", no trucks"}`;
+    cells += `<button type="button" class="${classes.join(" ")}" role="gridcell"
+        data-date="${iso}" aria-label="${esc(aria)}"${iso === selectedDate ? ' aria-selected="true"' : ""}>
+        <span class="cal-num">${d}</span>${badge}
+      </button>`;
+  }
+  calGrid.innerHTML = cells;
+
+  // Keep an open day-detail in sync if we navigated back to its month.
+  if (selectedDate) {
+    const [sy, sm] = selectedDate.split("-").map(Number);
+    if (sy === calYear && sm - 1 === calMonth) renderDayDetail();
+    else { selectedDate = ""; dayDetail.classList.add("hidden"); }
+  }
+}
+
+function stepMonth(delta) {
+  calMonth += delta;
+  if (calMonth < 0) { calMonth = 11; calYear -= 1; }
+  else if (calMonth > 11) { calMonth = 0; calYear += 1; }
+  renderCalendar();
+}
+
+/* ---------- day detail ---------- */
+
+function openDay(dateISO) {
+  selectedDate = dateISO;
+  hideResults();
+  newTruckForm.classList.add("hidden");
+  truckSearch.value = "";
+  renderCalendar();               // repaint selection highlight
+  dayDetail.classList.remove("hidden");
+  renderDayDetail();
+  dayDetail.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderDayDetail() {
+  if (!selectedDate) return;
+  dayDetailLabel.textContent = formatDate(selectedDate);
+  const list = bookingsOn(selectedDate);
+  if (list.length === 0) {
+    dayTrucks.innerHTML = `<div class="card"><div class="empty">No trucks booked yet. Add one below.</div></div>`;
+    return;
+  }
+  dayTrucks.innerHTML = `<div class="card">${list.map((b) => {
+    const hours = hoursLabel(b.startTime, b.endTime);
+    const cat = b.vendorCategory || vendorCategoryFor(b.vendorId);
+    return `
+      <div class="truck-row" data-booking="${esc(b.id)}">
+        <div class="truck-main">
+          <div class="truck-name">${esc(b.vendorName || "Truck")}</div>
+          <div class="truck-meta">
+            ${hours ? `<span class="truck-hours">${esc(hours)}</span>` : ""}
+            ${cat ? `<span class="badge bone">${esc(cat)}</span>` : ""}
+          </div>
+          ${b.note ? `<div class="truck-note">${esc(b.note)}</div>` : ""}
+        </div>
+        <div class="truck-actions">
+          <button type="button" class="icon-btn" data-edit-booking="${esc(b.id)}" aria-label="Edit time or note">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 L4 16 L15 5 L19 9 L8 20 Z" /><path d="M13 7 L17 11" /></svg>
+          </button>
+          <button type="button" class="icon-btn danger" data-remove-booking="${esc(b.id)}" aria-label="Remove ${esc(b.vendorName || "truck")}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
+          </button>
+        </div>
+      </div>`;
+  }).join("")}</div>`;
+}
+
+function vendorCategoryFor(vendorId) {
+  const v = vendorsList().find((x) => x.id === vendorId);
+  return v ? v.category : "";
+}
+
+/* ---------- add-a-truck search ---------- */
+
+function hideResults() {
+  truckResults.classList.add("hidden");
+  truckResults.innerHTML = "";
+  truckSearch.setAttribute("aria-expanded", "false");
+}
+
+function renderResults(query) {
+  const q = query.trim().toLowerCase();
+  const matches = vendorsList()
+    .filter((v) => !q || String(v.name || "").toLowerCase().includes(q) || String(v.category || "").toLowerCase().includes(q))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")))
+    .slice(0, 8);
+
+  const rows = matches.map((v) => `
+    <button type="button" class="truck-result" role="option" data-vendor="${esc(v.id)}">
+      <span class="tr-name">${esc(v.name)}</span>
+      <span class="tr-cat">${esc(v.category || "")}</span>
+    </button>`).join("");
+
+  const addNew = `
+    <button type="button" class="truck-result add-new" role="option" data-add-new="1">
+      <span class="tr-name">+ Add a new truck${q ? ` "${esc(query.trim())}"` : ""}</span>
+    </button>`;
+
+  truckResults.innerHTML = rows + addNew;
+  truckResults.classList.remove("hidden");
+  truckSearch.setAttribute("aria-expanded", "true");
+}
+
+/* ---------- booking editor sheet ---------- */
+
+function openBookingSheet(ctx) {
+  sheetCtx = ctx;
+  bkError.classList.add("hidden");
+  bkError.textContent = "";
+  if (ctx.mode === "add") {
+    const v = vendorsList().find((x) => x.id === ctx.vendorId);
+    bkSheetTitle.textContent = v ? v.name : "Truck";
+    bkSheetWhen.textContent = formatDate(selectedDate);
+    bkStart.value = "09:00";
+    bkEnd.value = "17:00";
+    bkNote.value = "";
+    bkRepeat.checked = false;
+    bkRepeatRow.classList.remove("hidden");
+    bkSave.textContent = "Book it";
+  } else {
+    const b = activeBookings().find((x) => x.id === ctx.id);
+    if (!b) return;
+    bkSheetTitle.textContent = b.vendorName || "Truck";
+    bkSheetWhen.textContent = formatDate(b.date);
+    bkStart.value = b.startTime || "09:00";
+    bkEnd.value = b.endTime || "17:00";
+    bkNote.value = b.note || "";
+    bkRepeatRow.classList.add("hidden");
+    bkSave.textContent = "Save";
+  }
+  bookingSheet.classList.remove("hidden");
+  setTimeout(() => bkStart && bkStart.focus(), 60);
+}
+
+function closeBookingSheet() {
+  bookingSheet.classList.add("hidden");
+  sheetCtx = null;
+}
+
+// Every same-weekday date from `fromISO` through the end of its month (inclusive).
+function weeklyDatesThroughMonthEnd(fromISO) {
+  const [y, m, d] = fromISO.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate(); // m is 1-based here -> day 0 of next month
+  const out = [];
+  for (let day = d; day <= daysInMonth; day += 7) out.push(ymd(y, m - 1, day));
+  return out;
+}
+
+function newSeriesId() {
+  return (window.crypto && crypto.randomUUID) ? `ser_${crypto.randomUUID()}` : `ser_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+}
+
 /* ---------- rendering: attachment thumbnails ---------- */
 
 function renderThumbs() {
@@ -694,6 +985,152 @@ function setBusy(value, button, label) {
   }
 }
 
+/* ---------- food trucks: submit booking (add or edit) ---------- */
+
+async function submitBooking(event) {
+  event.preventDefault();
+  if (busy || !sheetCtx) return;
+
+  const start = bkStart.value.trim() || "09:00";
+  const end = bkEnd.value.trim() || "17:00";
+  if (end < start) {
+    bkError.textContent = "End time can't be before the start time.";
+    bkError.classList.remove("hidden");
+    return;
+  }
+  bkError.classList.add("hidden");
+  const note = bkNote.value.trim();
+
+  // ---- EDIT: patch time/note on one booking ----
+  if (sheetCtx.mode === "edit") {
+    const id = sheetCtx.id;
+    setBusy(true, bkSave, "Saving…");
+    try {
+      const res = await api.updateBooking(id, { startTime: start, endTime: end, note });
+      if (res && res.ok) {
+        updateLocalBooking(id, { startTime: start, endTime: end, note });
+        closeBookingSheet();
+        renderDayDetail();
+        toast("Updated.");
+        refresh();
+      } else {
+        bkError.textContent = "That didn't save. Please try again.";
+        bkError.classList.remove("hidden");
+      }
+    } catch (err) {
+      bkError.textContent = "That didn't save. Please try again.";
+      bkError.classList.remove("hidden");
+    } finally {
+      setBusy(false, bkSave, "Save");
+    }
+    return;
+  }
+
+  // ---- ADD: one booking, or a weekly series through month-end ----
+  const vendor = vendorsList().find((v) => v.id === sheetCtx.vendorId);
+  if (!vendor) { closeBookingSheet(); return; }
+  const dates = bkRepeat.checked ? weeklyDatesThroughMonthEnd(selectedDate) : [selectedDate];
+  const seriesId = bkRepeat.checked && dates.length > 1 ? newSeriesId() : "";
+  const bookings = dates.map((date) => ({ vendorId: vendor.id, date, startTime: start, endTime: end, note }));
+
+  setBusy(true, bkSave, "Booking…");
+  try {
+    const res = await api.addBookings(bookings, seriesId);
+    if (res && res.ok) {
+      // Paint the new bookings immediately using the ids the server returned.
+      const ids = Array.isArray(res.ids) ? res.ids : [];
+      const nowIso = new Date().toISOString();
+      const local = bookings.map((b, i) => ({
+        id: ids[i] || `local_${Date.now()}_${i}`,
+        clientId: (currentData && currentData.client && currentData.client.clientId) || "",
+        vendorId: b.vendorId,
+        vendorName: vendor.name,
+        vendorCategory: vendor.category,
+        date: b.date,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        note: b.note,
+        seriesId,
+        status: "scheduled",
+        createdAt: nowIso,
+        updatedAt: nowIso,
+      }));
+      addLocalBookings(local);
+      closeBookingSheet();
+      hideResults();
+      truckSearch.value = "";
+      renderDayDetail();
+      toast(dates.length > 1 ? `Booked ${vendor.name} on ${dates.length} days.` : `${vendor.name} booked.`);
+      refresh();
+    } else {
+      bkError.textContent = "That didn't book. Please try again.";
+      bkError.classList.remove("hidden");
+    }
+  } catch (err) {
+    bkError.textContent = "That didn't book. Please try again.";
+    bkError.classList.remove("hidden");
+  } finally {
+    setBusy(false, bkSave, "Book it");
+  }
+}
+
+/* ---------- food trucks: add a brand-new truck, then book it ---------- */
+
+async function submitNewTruck(event) {
+  event.preventDefault();
+  if (busy) return;
+
+  const name = ntName.value.trim();
+  const category = ntCategory.value.trim().toUpperCase();
+  const price = ntPrice.value;
+  const tagline = ntTagline.value.trim();
+  if (!name) { toast("Give the truck a name."); ntName.focus(); return; }
+  if (!category) { toast("Pick or type a category."); ntCategory.focus(); return; }
+
+  const ntSave = $("nt-save");
+  setBusy(true, ntSave, "Adding…");
+  try {
+    const res = await api.upsertVendor({ name, category, price, tagline, active: true });
+    if (res && res.ok && res.vendorId) {
+      const nowIso = new Date().toISOString();
+      addLocalVendor({
+        id: res.vendorId,
+        clientId: (currentData && currentData.client && currentData.client.clientId) || "",
+        name, category, price, tagline, active: true,
+        createdAt: nowIso, updatedAt: nowIso,
+      });
+      newTruckForm.classList.add("hidden");
+      ntName.value = ""; ntCategory.value = ""; ntTagline.value = ""; ntPrice.value = "$$";
+      // Immediately open the booking sheet for the truck we just created.
+      openBookingSheet({ mode: "add", vendorId: res.vendorId });
+      refresh();
+    } else {
+      toast("Couldn't add that truck. Please try again.");
+    }
+  } catch (err) {
+    toast("Couldn't add that truck. Please try again.");
+  } finally {
+    setBusy(false, ntSave, "Add & book it");
+  }
+}
+
+async function removeBooking(id) {
+  const b = activeBookings().find((x) => x.id === id);
+  const name = (b && b.vendorName) || "this truck";
+  if (!window.confirm(`Remove ${name} from ${formatDate(selectedDate)}?`)) return;
+  // Optimistic: drop it now, restore on failure.
+  removeLocalBooking(id);
+  renderDayDetail();
+  try {
+    const res = await api.deleteBooking({ id });
+    if (res && res.ok) { toast("Removed."); refresh(); }
+    else { toast("Couldn't remove that. Refreshing…"); refresh(); }
+  } catch (err) {
+    toast("Couldn't remove that. Refreshing…");
+    refresh();
+  }
+}
+
 /* ---------- load / refresh ---------- */
 
 // Signature of the render-relevant slice of a payload. Lets applyData skip the
@@ -701,7 +1138,8 @@ function setBusy(value, button, label) {
 // same data (so half-typed drafts and scroll position are never disturbed).
 function dataSig(data) {
   try {
-    return JSON.stringify([data && data.client, data && data.requests, data && data.events]);
+    return JSON.stringify([data && data.client, data && data.requests, data && data.events,
+      data && data.vendors, data && data.bookings]);
   } catch {
     return `sig_${Date.now()}`;
   }
@@ -732,6 +1170,42 @@ function applyData(data) {
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
   renderIdeas(data);
+  applyFoodTrucks(data);
+}
+
+/* ---------- food trucks: gating + surface sync ---------- */
+
+// The Food Trucks surface exists ONLY when the payload says this client has the
+// feature. Absent flag -> the switch stays hidden and the portal is unchanged.
+function applyFoodTrucks(data) {
+  const client = (data && data.client) || {};
+  const enabled = !!(client.features && client.features.foodTrucks === true);
+  foodTrucksEnabled = enabled;
+
+  if (!enabled) {
+    surfaceChips.classList.add("hidden");
+    surfaceTrucks.classList.add("hidden");
+    surfaceRequests.classList.remove("hidden");
+    currentSurface = "requests";
+    return;
+  }
+
+  surfaceChips.classList.remove("hidden");
+
+  // First time we learn the feature is on: default the calendar to the current month.
+  if (!calYear) {
+    const now = new Date();
+    calYear = now.getFullYear();
+    calMonth = now.getMonth();
+  }
+
+  // Category datalist for "+ Add a new truck", built from the vendors already present
+  // (uppercased, deduped) — constrains to the known set while still allowing a new one.
+  const cats = [...new Set(vendorsList().map((v) => String(v.category || "").toUpperCase()).filter(Boolean))].sort();
+  truckCategories.innerHTML = cats.map((c) => `<option value="${esc(c)}"></option>`).join("");
+
+  // If the trucks surface is showing, repaint it against the fresh data.
+  if (currentSurface === "trucks") renderCalendar();
 }
 
 // Re-fetch the client's data and re-render the lists (used after submits and
@@ -773,6 +1247,52 @@ function addLocalEvent(evt) {
   const events = Array.isArray(data.events) ? data.events.slice() : [];
   if (!events.some((e) => e && e.eventId === evt.eventId)) events.push(evt);
   applyLocalData({ ...data, events });
+}
+
+/* ---------- optimistic local updates: food trucks ---------- */
+
+// Merge locally-known vendors/bookings, re-render calendar + open day, cache through.
+function applyLocalTrucks({ vendors, bookings }) {
+  const data = currentData || { ok: true, client: {}, requests: [], events: [], vendors: [], bookings: [] };
+  const next = {
+    ...data,
+    vendors: vendors || data.vendors || [],
+    bookings: bookings || data.bookings || [],
+  };
+  // applyData short-circuits when the requests/events/client signature is unchanged
+  // (food-truck edits don't touch those), so paint the trucks surface directly.
+  currentData = next;
+  if (DATA_CACHE_KEY) writeDataCache(safeLocalStorage(), DATA_CACHE_KEY, next);
+  if (currentSurface === "trucks") renderCalendar();
+}
+
+function addLocalVendor(vendor) {
+  const data = currentData || {};
+  const vendors = Array.isArray(data.vendors) ? data.vendors.slice() : [];
+  const idx = vendors.findIndex((v) => v && v.id === vendor.id);
+  if (idx >= 0) vendors[idx] = { ...vendors[idx], ...vendor };
+  else vendors.push(vendor);
+  applyLocalTrucks({ vendors });
+}
+
+function addLocalBookings(bookings) {
+  const data = currentData || {};
+  const list = Array.isArray(data.bookings) ? data.bookings.slice() : [];
+  for (const b of bookings) if (!list.some((x) => x && x.id === b.id)) list.push(b);
+  applyLocalTrucks({ bookings: list });
+}
+
+function updateLocalBooking(id, patch) {
+  const data = currentData || {};
+  const list = Array.isArray(data.bookings) ? data.bookings.slice() : [];
+  const idx = list.findIndex((b) => b && b.id === id);
+  if (idx >= 0) { list[idx] = { ...list[idx], ...patch }; applyLocalTrucks({ bookings: list }); }
+}
+
+function removeLocalBooking(id) {
+  const data = currentData || {};
+  const list = (Array.isArray(data.bookings) ? data.bookings : []).filter((b) => b && b.id !== id);
+  applyLocalTrucks({ bookings: list });
 }
 
 // The server's updated copy of one request (e.g. after posting a thread message).
@@ -1014,6 +1534,77 @@ ideasList.addEventListener("click", async (e) => {
   }
   if (ok === items.length) { toast(`${idea.label} campaign sent. ${ok} posts queued.`); await refresh(); }
   else { toast(`Sent ${ok} of ${items.length}. Please try the rest again.`); btn.disabled = false; }
+});
+
+/* ---------- food trucks: wire up ---------- */
+
+// Surface switch (Requests | Food Trucks).
+surfaceChips.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (btn && btn.dataset.surface) selectSurface(btn.dataset.surface);
+});
+surfaceChips.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const btns = Array.from(surfaceChips.querySelectorAll(".seg-btn"));
+  const i = btns.findIndex((b) => b.dataset.surface === currentSurface);
+  const ni = e.key === "ArrowRight" ? Math.min(btns.length - 1, i + 1) : Math.max(0, i - 1);
+  if (ni !== i && btns[ni]) { selectSurface(btns[ni].dataset.surface); btns[ni].focus(); e.preventDefault(); }
+});
+
+// Month navigation.
+calPrev.addEventListener("click", () => stepMonth(-1));
+calNext.addEventListener("click", () => stepMonth(1));
+
+// Tap a day cell -> open that day's detail.
+calGrid.addEventListener("click", (e) => {
+  const cell = e.target.closest("[data-date]");
+  if (cell) openDay(cell.getAttribute("data-date"));
+});
+
+// Day-detail: edit / remove a booking (delegated — cards re-render on refresh).
+dayTrucks.addEventListener("click", (e) => {
+  const edit = e.target.closest("[data-edit-booking]");
+  if (edit) { openBookingSheet({ mode: "edit", id: edit.getAttribute("data-edit-booking") }); return; }
+  const remove = e.target.closest("[data-remove-booking]");
+  if (remove) removeBooking(remove.getAttribute("data-remove-booking"));
+});
+
+// Add-a-truck search field.
+truckSearch.addEventListener("focus", () => { if (foodTrucksEnabled) renderResults(truckSearch.value); });
+truckSearch.addEventListener("input", () => renderResults(truckSearch.value));
+truckResults.addEventListener("click", (e) => {
+  const addNew = e.target.closest("[data-add-new]");
+  if (addNew) {
+    hideResults();
+    // Prefill the new-truck name with whatever they typed.
+    ntName.value = truckSearch.value.trim();
+    ntCategory.value = ""; ntTagline.value = ""; ntPrice.value = "$$";
+    newTruckForm.classList.remove("hidden");
+    newTruckForm.scrollIntoView({ behavior: "smooth", block: "center" });
+    (ntName.value ? ntCategory : ntName).focus();
+    return;
+  }
+  const pick = e.target.closest("[data-vendor]");
+  if (pick) { hideResults(); openBookingSheet({ mode: "add", vendorId: pick.getAttribute("data-vendor") }); }
+});
+// Dismiss the results dropdown when focus leaves the search area.
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".truck-search")) hideResults();
+});
+
+// New-truck mini form.
+newTruckForm.addEventListener("submit", submitNewTruck);
+ntCancel.addEventListener("click", () => {
+  newTruckForm.classList.add("hidden");
+  ntName.value = ""; ntCategory.value = ""; ntTagline.value = "";
+});
+
+// Booking editor sheet.
+bookingForm.addEventListener("submit", submitBooking);
+bkCancel.addEventListener("click", closeBookingSheet);
+bookingSheet.addEventListener("click", (e) => { if (e.target === bookingSheet) closeBookingSheet(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !bookingSheet.classList.contains("hidden")) closeBookingSheet();
 });
 
 // Default selection + initial load.

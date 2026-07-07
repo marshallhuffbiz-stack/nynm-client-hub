@@ -15,7 +15,7 @@ const store = {
   settings: { adminToken: "dev-admin", digestHour: 8 },
   clients: [
     { clientId: "the-o", name: "The O", token: "dev-the-o", pin: "", brandSlug: "the-o", postizChannels: [], siteFolder: "", active: true, createdAt: iso(now), updatedAt: iso(now) },
-    { clientId: "eats-on-601", name: "Eats on 601", token: "dev-eats", pin: "", brandSlug: "eats-on-601", postizChannels: [], siteFolder: "", active: true, createdAt: iso(now), updatedAt: iso(now) },
+    { clientId: "eats-on-601", name: "Eats on 601", token: "dev-eats", pin: "", brandSlug: "eats-on-601", postizChannels: [], siteFolder: "", active: true, features: { foodTrucks: true }, createdAt: iso(now), updatedAt: iso(now) },
   ],
   requests: [
     {
@@ -65,6 +65,13 @@ const store = {
   events: [
     { eventId: "evt_seed_0001", clientId: "the-o", title: "Live music on the patio", date: "2026-06-20", description: "Local acoustic duo, 7-9pm.", promoted: false, requestId: "", createdAt: iso(now), updatedAt: iso(now) },
   ],
+  vendors: [
+    { id: "island-boys-food-truck", clientId: "eats-on-601", name: "Island Boys Food Truck", category: "CARIBBEAN", price: "$$", tagline: "Bajan-Caribbean · jerk chicken and island plates", active: true, createdAt: iso(now), updatedAt: iso(now) },
+    { id: "bella-sweet-boutique", clientId: "eats-on-601", name: "Bella Sweet Boutique", category: "DESSERTS", price: "$$", tagline: "Small-batch cupcakes, cookies, and sweet treats", active: true, createdAt: iso(now), updatedAt: iso(now) },
+    { id: "smokin-bbq-chateau", clientId: "eats-on-601", name: "Smokin BBQ Chateau", category: "BBQ", price: "$$", tagline: "Low-and-slow smoked brisket, ribs, and pulled pork", active: true, createdAt: iso(now), updatedAt: iso(now) },
+    { id: "taqueria-el-sol", clientId: "eats-on-601", name: "Taqueria El Sol", category: "TACOS", price: "$", tagline: "Street tacos, elotes, and horchata", active: true, createdAt: iso(now), updatedAt: iso(now) },
+  ],
+  bookings: [],
 };
 
 await mkdir(dirname(storePath), { recursive: true });

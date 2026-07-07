@@ -115,3 +115,124 @@
 .idea-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); margin-bottom: 4px; }
 .idea-detail { color: var(--label-2); font-size: 15px; letter-spacing: -0.2px; line-height: 1.4; }
 .idea-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+
+/* ===================== Food Trucks: top-level surface switch ===================== */
+/* The surface switch is a 2-up segmented control; the thumb width/offset is set in JS. */
+.surface-seg .seg-thumb { width: calc((100% - 4px) / 2); }
+.surface-seg .seg-btn { font-size: 15px; }
+
+/* ===================== Food Trucks: month calendar ===================== */
+.cal-card { padding: 14px 14px 16px; }
+.cal-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.cal-head h2 {
+  margin: 0; font-size: 19px; font-weight: 600; letter-spacing: -0.3px; color: var(--label);
+  text-align: center; flex: 1; font-variant-numeric: tabular-nums;
+}
+.cal-nav {
+  appearance: none; -webkit-appearance: none; border: none; cursor: pointer;
+  width: 40px; height: 40px; flex: none; border-radius: 50%;
+  background: var(--fill-input); color: var(--blue);
+  display: inline-flex; align-items: center; justify-content: center;
+  box-shadow: var(--specular);
+  transition: transform 180ms var(--ease), background var(--dur-fast) var(--ease);
+}
+.cal-nav svg { width: 20px; height: 20px; }
+.cal-nav:active { transform: scale(0.92); background: var(--gray-fill-2); }
+.cal-nav:focus-visible { outline: none; box-shadow: 0 0 0 4px var(--blue-fill); }
+
+.cal-dow {
+  display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px;
+  margin-bottom: 6px;
+}
+.cal-dow span {
+  text-align: center; font-size: 12px; font-weight: 600; color: var(--label-3);
+  letter-spacing: 0.2px;
+}
+
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-cell {
+  position: relative; appearance: none; -webkit-appearance: none; border: none;
+  background: transparent; cursor: pointer; font-family: var(--font);
+  aspect-ratio: 1 / 1; border-radius: 11px; padding: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  color: var(--label); font-size: 15px; letter-spacing: -0.2px;
+  transition: background var(--dur-fast) var(--ease), transform 140ms var(--ease);
+}
+.cal-cell.blank { pointer-events: none; }
+.cal-cell:not(.blank):active { transform: scale(0.94); }
+.cal-cell:not(.blank):hover { background: var(--fill-input); }
+.cal-cell:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-fill); }
+.cal-cell .cal-num { line-height: 1; font-variant-numeric: tabular-nums; }
+.cal-cell.today { font-weight: 700; }
+.cal-cell.today .cal-num { color: var(--blue); }
+.cal-cell.has-bookings { background: var(--blue-fill); }
+.cal-cell.selected { background: var(--blue); color: var(--on-accent); }
+.cal-cell.selected .cal-num, .cal-cell.selected.today .cal-num { color: var(--on-accent); }
+/* Count badge — small dot with the number of trucks that day. */
+.cal-count {
+  min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--blue); color: var(--on-accent);
+  font-size: 10px; font-weight: 700; line-height: 16px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.cal-cell.selected .cal-count { background: var(--on-accent); color: var(--blue); }
+
+/* ===================== Food Trucks: day-detail truck chips ===================== */
+.truck-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.truck-row + .truck-row { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--separator); }
+.truck-main { min-width: 0; flex: 1; }
+.truck-name { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); margin-bottom: 3px; }
+.truck-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.truck-hours { color: var(--blue); font-weight: 500; font-size: 14px; font-variant-numeric: tabular-nums; }
+.truck-note { color: var(--label-2); font-size: 14px; letter-spacing: -0.2px; margin-top: 5px; line-height: 1.35; }
+.truck-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+.icon-btn {
+  appearance: none; -webkit-appearance: none; border: none; cursor: pointer;
+  width: 34px; height: 34px; flex: none; border-radius: 50%;
+  background: var(--fill-input); color: var(--label-2);
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform 160ms var(--ease), background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.icon-btn svg { width: 17px; height: 17px; }
+.icon-btn:active { transform: scale(0.9); }
+.icon-btn.danger:hover { background: var(--red-fill); color: var(--red); }
+.icon-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-fill); }
+
+/* ===================== Food Trucks: vendor search results ===================== */
+.truck-search { position: relative; }
+.truck-results {
+  margin-top: 8px; border-radius: var(--r-input); overflow: hidden;
+  background: var(--fill-input); box-shadow: var(--specular);
+}
+.truck-result {
+  appearance: none; -webkit-appearance: none; border: none; width: 100%; text-align: left;
+  background: transparent; cursor: pointer; font-family: var(--font);
+  padding: 11px 14px; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  color: var(--label); transition: background var(--dur-fast) var(--ease);
+}
+.truck-result + .truck-result { border-top: 0.5px solid var(--separator); }
+.truck-result:hover, .truck-result:focus-visible { background: var(--gray-fill-2); outline: none; }
+.truck-result .tr-name { font-weight: 500; font-size: 16px; letter-spacing: -0.2px; }
+.truck-result .tr-cat { color: var(--label-3); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
+.truck-result.add-new .tr-name { color: var(--blue); font-weight: 600; }
+
+/* ===================== Food Trucks: booking editor sheet ===================== */
+.sheet-backdrop {
+  position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(0, 0, 0, 0.32); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px);
+}
+.sheet {
+  width: 100%; max-width: 520px;
+  background: var(--card); border-radius: 20px 20px 0 0;
+  padding: 10px 20px calc(24px + env(safe-area-inset-bottom));
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.22);
+  animation: sheet-up 300ms var(--spring);
+}
+@keyframes sheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }
+.sheet-grip { width: 36px; height: 5px; border-radius: 3px; background: var(--separator); margin: 4px auto 12px; }
+.sheet h2 { font-size: 20px; font-weight: 600; letter-spacing: -0.4px; margin-bottom: 2px; }
+.repeat-row {
+  display: flex; align-items: center; gap: 10px; margin: 16px 0 0; cursor: pointer;
+  font-size: 15px; color: var(--label); font-weight: 400; letter-spacing: -0.2px;
+}
+.repeat-row input { width: auto; flex: none; width: 20px; height: 20px; accent-color: var(--blue); box-shadow: none; }

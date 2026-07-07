@@ -1,7 +1,7 @@
 // Relay Desk — Marshall's internal control panel for all client requests.
 // Plain ES module. Talks to the shared API client (mock locally, Apps Script in prod).
 import { deskApi } from "../shared/api.js";
-import { API_MODE } from "../shared/config.js";
+import { API_MODE, API_BASE } from "../shared/config.js";
 import { openLightbox, makeZoomable } from "../shared/lightbox.js";
 import { resolveAccess, persistAccess, DESK_TOKEN_KEY } from "../shared/token.js";
 import { installLaunchManifest } from "../shared/pwa.js";
@@ -37,6 +37,33 @@ const _access = resolveAccess({
 });
 const adminToken = _access.token;
 const api = deskApi(adminToken);
+
+// Food-truck writes are tenant-scoped, and for an admin token the backend reads
+// the tenant from a TOP-LEVEL `clientId` on the POST body (forcedClientId_ in
+// Code.gs / the mock). The shared deskApi.upsertVendor/addBookings don't carry
+// one — they're written for the single-tenant portal — so the Desk injects it
+// here. Same text/plain + body-status contract as shared/api.js `http()`; we do
+// NOT edit that file. updateBooking/deleteBooking match by id with an admin
+// bypass, so those keep using the shared client unchanged.
+async function adminPost(body) {
+  const res = await fetch(API_BASE, {
+    method: "POST",
+    headers: { "content-type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ admin: adminToken, ...body }),
+  });
+  let data;
+  try { data = await res.json(); } catch { data = { ok: false, error: "bad json from server" }; }
+  const status = typeof data.status === "number" ? data.status : res.status;
+  return { ...data, status };
+}
+// Tenant-scoped food-truck admin API: upsertVendor + addBookings need the
+// clientId; updateBooking/deleteBooking delegate to the shared client.
+const truckApi = {
+  upsertVendor: (clientId, vendor) => adminPost({ action: "upsertVendor", clientId, vendor }),
+  addBookings: (clientId, bookings, seriesId) => adminPost({ action: "addBookings", clientId, bookings, seriesId }),
+  updateBooking: (id, patch) => api.updateBooking(id, patch),
+  deleteBooking: (sel) => api.deleteBooking(sel),
+};
 
 // Stale-while-revalidate snapshot of the whole desk payload, keyed by the admin
 // token (same pattern the portal ships). Null token -> no caching.
@@ -265,6 +292,10 @@ const state = {
   clients: [],
   requests: [],
   events: [],
+  // Food Trucks: the vendor registry + bookings come back on the admin load for
+  // ALL clients; the Food Trucks tab scopes them to one food-truck client.
+  vendors: [],
+  bookings: [],
   clientById: {},
   filterStage: "all",
   filterClient: "all",
@@ -273,6 +304,11 @@ const state = {
   // unsent change-note text (inline "Request changes" editor), keyed by request id.
   // A key existing (even empty) means the editor is open for that request.
   changeNotes: {},
+  // Food Trucks tab UI: which food-truck client, which month (YYYY-MM anchor,
+  // 1st of the month), and which day is expanded for editing (YYYY-MM-DD or "").
+  truckClient: "",
+  truckMonth: "",
+  truckDay: "",
 };
 
 // Persist view + filters across relaunches (iOS kills PWAs constantly; keep his place).
@@ -280,15 +316,19 @@ const UI_STATE_KEY = "relay.desk.ui";
 (function hydrateUiState() {
   const saved = readDataCache(safeLocalStorage(), UI_STATE_KEY);
   if (!saved) return;
-  if (["requests", "events", "clients"].includes(saved.view)) state.view = saved.view;
+  if (["requests", "events", "trucks", "history", "clients"].includes(saved.view)) state.view = saved.view;
   if (STAGE_FILTERS.some((f) => f.key === saved.filterStage)) state.filterStage = saved.filterStage;
   if (typeof saved.filterClient === "string" && saved.filterClient) state.filterClient = saved.filterClient;
+  if (typeof saved.truckClient === "string") state.truckClient = saved.truckClient;
+  if (typeof saved.truckMonth === "string" && /^\d{4}-\d{2}-01$/.test(saved.truckMonth)) state.truckMonth = saved.truckMonth;
 })();
 function saveUiState() {
   writeDataCache(safeLocalStorage(), UI_STATE_KEY, {
     view: state.view,
     filterStage: state.filterStage,
     filterClient: state.filterClient,
+    truckClient: state.truckClient,
+    truckMonth: state.truckMonth,
   });
 }
 
@@ -373,10 +413,18 @@ function ingest(res) {
   state.clients = (Array.isArray(res.clients) ? res.clients : []).filter((c) => !HIDDEN_CLIENTS.has(c.clientId));
   state.requests = (Array.isArray(res.requests) ? res.requests : []).filter((r) => !HIDDEN_CLIENTS.has(r.clientId));
   state.events = (Array.isArray(res.events) ? res.events : []).filter((e) => !HIDDEN_CLIENTS.has(e.clientId));
+  // Food Trucks: registry + schedule for every client; the tab scopes them itself.
+  state.vendors = (Array.isArray(res.vendors) ? res.vendors : []).filter((v) => !HIDDEN_CLIENTS.has(v.clientId));
+  state.bookings = (Array.isArray(res.bookings) ? res.bookings : []).filter((b) => !HIDDEN_CLIENTS.has(b.clientId));
   state.clientById = {};
   for (const c of state.clients) state.clientById[c.clientId] = c;
   // A persisted client filter may reference a client that no longer exists.
   if (state.filterClient !== "all" && !state.clientById[state.filterClient]) state.filterClient = "all";
+  // Keep the Food Trucks tab's client selection valid; default to the first
+  // food-truck client if unset or stale.
+  const ftIds = truckClientIds();
+  if (!ftIds.includes(state.truckClient)) state.truckClient = ftIds[0] || "";
+  if (!state.truckMonth) state.truckMonth = monthAnchor(todayISO());
 }
 
 function showBadToken() {
@@ -426,6 +474,12 @@ function render() {
   $("#count-requests").textContent = needsYou ? String(needsYou) : "";
   $("#count-events").textContent = unpromoted ? String(unpromoted) : "";
   $("#count-clients").textContent = state.clients.length ? String(state.clients.length) : "";
+  // Food Trucks badge: how many trucks are booked in the month on screen for the
+  // selected client — a quick "is this month filled in" signal.
+  const truckN = state.truckClient
+    ? scheduledBookings().filter((b) => b.clientId === state.truckClient && b.date.slice(0, 7) === String(state.truckMonth).slice(0, 7)).length
+    : 0;
+  $("#count-trucks").textContent = truckN ? String(truckN) : "";
 
   // tab active states
   for (const tab of document.querySelectorAll("#tabs .tab")) {
@@ -435,11 +489,13 @@ function render() {
   }
   $("#panel-requests").classList.toggle("hidden", state.view !== "requests");
   $("#panel-events").classList.toggle("hidden", state.view !== "events");
+  $("#panel-trucks").classList.toggle("hidden", state.view !== "trucks");
   $("#panel-history").classList.toggle("hidden", state.view !== "history");
   $("#panel-clients").classList.toggle("hidden", state.view !== "clients");
 
   if (state.view === "requests") renderRequests();
   else if (state.view === "events") renderEvents();
+  else if (state.view === "trucks") renderTrucks();
   else if (state.view === "history") renderHistory();
   else if (state.view === "clients") renderClients();
 }
@@ -1101,6 +1157,428 @@ function eventCard(e, past = false) {
   }
 
   return card;
+}
+
+// ===================================================================
+// FOOD TRUCKS view — a month calendar of truck bookings for one food-truck
+// client (default Eats on 601). Marshall can add / edit time+note / cancel a
+// day's trucks here, the same capabilities the client has in the portal, for
+// when he schedules on their behalf. The monthly schedule graphic still gets
+// approved through the normal Requests ready→approve flow — nothing here posts.
+// ===================================================================
+const LOT_START = "09:00"; // default lot hours (spec §2, decision 5): 9A–5P
+const LOT_END = "17:00";
+// The category set the website's vendorGroups understands; "+ Add a new truck"
+// constrains category to this so grouping/rendering stays valid.
+const VENDOR_CATEGORIES = [
+  "TACOS", "BBQ", "BURGERS", "PIZZA", "CARIBBEAN", "SEAFOOD", "ASIAN", "MEXICAN",
+  "SOUTHERN", "BREAKFAST", "DESSERTS", "COFFEE", "DRINKS", "SNACKS", "VEGAN", "OTHER",
+];
+const VENDOR_PRICES = ["$", "$$", "$$$"];
+
+// Clients that get the Food Trucks tab: those with features.foodTrucks. If none
+// are flagged (older data), fall back to any client that already has vendors so
+// the tab is never uselessly empty.
+function truckClientIds() {
+  const flagged = state.clients.filter((c) => c.features && c.features.foodTrucks).map((c) => c.clientId);
+  if (flagged.length) return flagged;
+  const withVendors = [...new Set(state.vendors.map((v) => v.clientId))].filter((id) => state.clientById[id]);
+  return withVendors;
+}
+
+// Only real (scheduled) bookings — the backend already drops cancelled ones from
+// the client payload, but the admin payload can carry them, so guard here too.
+function scheduledBookings() {
+  return state.bookings.filter((b) => b && b.status !== "cancelled");
+}
+
+// "YYYY-MM-DD" -> "YYYY-MM-01" anchor for the month it belongs to.
+function monthAnchor(iso) {
+  const m = String(iso || "").match(/^(\d{4})-(\d{2})/);
+  return m ? `${m[1]}-${m[2]}-01` : monthAnchor(todayISO());
+}
+// Shift a month anchor by ±1 month, staying on the 1st.
+function shiftMonth(anchor, delta) {
+  const m = String(anchor).match(/^(\d{4})-(\d{2})/);
+  const d = m ? new Date(Number(m[1]), Number(m[2]) - 1 + delta, 1) : new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
+}
+// "9A–5P" compact hours from "09:00"/"17:00" (mirrors the site's compactTime style).
+function compactHours(start, end) {
+  const one = (t) => {
+    const mm = String(t || "").match(/^(\d{1,2}):(\d{2})$/);
+    if (!mm) return "";
+    let h = Number(mm[1]);
+    const min = mm[2];
+    const ap = h < 12 ? "A" : "P";
+    h = h % 12; if (h === 0) h = 12;
+    return min === "00" ? `${h}${ap}` : `${h}:${min}${ap}`;
+  };
+  const s = one(start), e = one(end);
+  if (!s && !e) return "";
+  return e ? `${s}–${e}` : s;
+}
+
+// A day-cell date (YYYY-MM-DD) for a given year/month(0-based)/day.
+function ymd(y, m0, day) {
+  return `${y}-${String(m0 + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+}
+
+function trucksForDay(clientId, dateISO) {
+  return scheduledBookings()
+    .filter((b) => b.clientId === clientId && b.date === dateISO)
+    .sort((a, b) => String(a.startTime).localeCompare(String(b.startTime)) || String(a.vendorName).localeCompare(String(b.vendorName)));
+}
+
+function renderTrucks() {
+  const body = $("#trucks-body");
+  const ftIds = truckClientIds();
+
+  if (!ftIds.length) {
+    body.replaceChildren(el("div", { class: "card empty" },
+      "No food-truck clients yet. Turn on a client's food-truck scheduling to manage a lineup here."));
+    return;
+  }
+  if (!ftIds.includes(state.truckClient)) state.truckClient = ftIds[0];
+  if (!state.truckMonth) state.truckMonth = monthAnchor(todayISO());
+
+  const parts = [];
+
+  // Client scope selector — only when more than one client has food trucks.
+  if (ftIds.length > 1) {
+    const rail = el("div", { class: "chip-row", "aria-label": "Choose a food-truck client" },
+      ...ftIds.map((id) =>
+        el("button", {
+          type: "button",
+          class: "chip sm" + (state.truckClient === id ? " active" : ""),
+          onclick: () => { state.truckClient = id; state.truckDay = ""; saveUiState(); renderTrucks(); },
+        }, clientName(id)))
+    );
+    parts.push(el("div", { class: "filters" }, rail));
+  }
+
+  parts.push(monthHeader());
+  parts.push(monthGrid());
+
+  body.replaceChildren(...parts);
+}
+
+// Prev / month-label / next, plus a "Today" jump when we're off the current month.
+function monthHeader() {
+  const anchor = state.truckMonth;
+  const m = anchor.match(/^(\d{4})-(\d{2})/);
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  const label = d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+
+  const prev = el("button", { type: "button", class: "cal-nav", "aria-label": "Previous month" },
+    el("span", { "aria-hidden": "true" }, "‹"));
+  prev.addEventListener("click", () => { state.truckMonth = shiftMonth(anchor, -1); state.truckDay = ""; saveUiState(); renderTrucks(); });
+
+  const next = el("button", { type: "button", class: "cal-nav", "aria-label": "Next month" },
+    el("span", { "aria-hidden": "true" }, "›"));
+  next.addEventListener("click", () => { state.truckMonth = shiftMonth(anchor, 1); state.truckDay = ""; saveUiState(); renderTrucks(); });
+
+  const head = el("div", { class: "cal-head" },
+    prev,
+    el("div", { class: "cal-title" }, label),
+    next
+  );
+
+  const onThisMonth = monthAnchor(todayISO()) === anchor;
+  if (!onThisMonth) {
+    const today = el("button", { type: "button", class: "btn ghost sm cal-today" }, "Today");
+    today.addEventListener("click", () => {
+      state.truckMonth = monthAnchor(todayISO());
+      state.truckDay = todayISO();
+      saveUiState();
+      renderTrucks();
+    });
+    head.append(today);
+  }
+  return head;
+}
+
+// The month grid: weekday header row + day cells. Each cell shows its trucks
+// (name · hours · category). Tapping a cell opens its editor below the grid.
+function monthGrid() {
+  const clientId = state.truckClient;
+  const m = state.truckMonth.match(/^(\d{4})-(\d{2})/);
+  const year = Number(m[1]);
+  const month0 = Number(m[2]) - 1;
+  const first = new Date(year, month0, 1);
+  const startWeekday = first.getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month0 + 1, 0).getDate();
+  const today = todayISO();
+
+  const wrap = el("div", { class: "cal" });
+
+  // weekday header
+  const dow = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  wrap.append(el("div", { class: "cal-dow" }, ...dow.map((n) => el("div", { class: "cal-dowcell" }, n))));
+
+  const grid = el("div", { class: "cal-grid", role: "grid", "aria-label": "Month schedule" });
+  // leading blanks
+  for (let i = 0; i < startWeekday; i++) grid.append(el("div", { class: "cal-cell empty", "aria-hidden": "true" }));
+
+  for (let day = 1; day <= daysInMonth; day++) {
+    const dateISO = ymd(year, month0, day);
+    const trucks = trucksForDay(clientId, dateISO);
+    const isToday = dateISO === today;
+    const isOpen = state.truckDay === dateISO;
+
+    const cell = el("button", {
+      type: "button",
+      class: "cal-cell" + (isToday ? " today" : "") + (trucks.length ? " has" : "") + (isOpen ? " open" : ""),
+      role: "gridcell",
+      "aria-label": `${new Date(year, month0, day).toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" })}, ${trucks.length} truck${trucks.length === 1 ? "" : "s"}`,
+      "aria-pressed": isOpen ? "true" : "false",
+    });
+    cell.append(el("div", { class: "cal-daynum" }, String(day)));
+    if (trucks.length) {
+      const tags = el("div", { class: "cal-trucks" });
+      for (const b of trucks.slice(0, 3)) {
+        tags.append(el("div", { class: "cal-truck", title: `${b.vendorName} · ${compactHours(b.startTime, b.endTime)}` }, b.vendorName));
+      }
+      if (trucks.length > 3) tags.append(el("div", { class: "cal-more" }, `+${trucks.length - 3} more`));
+      cell.append(tags);
+    }
+    cell.addEventListener("click", () => {
+      state.truckDay = isOpen ? "" : dateISO;
+      saveUiState();
+      renderTrucks();
+    });
+    grid.append(cell);
+  }
+  wrap.append(grid);
+
+  // Day editor drops in directly under the grid when a day is selected.
+  if (state.truckDay && state.truckDay.slice(0, 7) === `${year}-${String(month0 + 1).padStart(2, "0")}`) {
+    wrap.append(dayEditor(clientId, state.truckDay));
+  }
+  return wrap;
+}
+
+// The expanded day: existing trucks (edit hours/note, cancel) + an add-a-truck row.
+function dayEditor(clientId, dateISO) {
+  const dParts = dateISO.split("-");
+  const dObj = new Date(Number(dParts[0]), Number(dParts[1]) - 1, Number(dParts[2]));
+  const heading = dObj.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" });
+  const card = el("div", { class: "card day-editor" });
+
+  const close = el("button", { type: "button", class: "req-del", "aria-label": "Close day", title: "Close" },
+    el("span", { "aria-hidden": "true", style: "font-size:22px;line-height:1" }, "×"));
+  close.addEventListener("click", () => { state.truckDay = ""; saveUiState(); renderTrucks(); });
+
+  card.append(el("div", { class: "spread" },
+    el("div", { class: "day-heading" }, heading),
+    close
+  ));
+
+  const trucks = trucksForDay(clientId, dateISO);
+  const list = el("div", { class: "truck-list" });
+  if (!trucks.length) {
+    list.append(el("div", { class: "muted small", style: "padding:8px 0" }, "No trucks booked yet for this day."));
+  } else {
+    for (const b of trucks) list.append(truckRow(b));
+  }
+  card.append(list);
+
+  card.append(addTruckRow(clientId, dateISO));
+  return card;
+}
+
+// One booked truck: name + category, hours, note; edit (time/note) + cancel.
+function truckRow(b) {
+  const row = el("div", { class: "truck-row", "data-bkg": b.id });
+  const cat = b.category || vendorCategory(b.vendorId);
+
+  const editing = state._editingBooking === b.id;
+
+  const info = el("div", { class: "truck-info" },
+    el("div", { class: "truck-name" }, b.vendorName || b.vendorId),
+    el("div", { class: "truck-sub" },
+      compactHours(b.startTime, b.endTime),
+      cat ? el("span", { class: "truck-cat" }, cat) : false,
+      b.note ? el("span", { class: "truck-note" }, b.note) : false
+    )
+  );
+
+  const editBtn = el("button", { type: "button", class: "btn ghost sm", "aria-expanded": editing ? "true" : "false" }, editing ? "Close" : "Edit");
+  editBtn.addEventListener("click", () => {
+    state._editingBooking = editing ? "" : b.id;
+    renderTrucks();
+  });
+
+  const cancelBtn = el("button", { type: "button", class: "btn danger sm" }, "Cancel");
+  cancelBtn.addEventListener("click", async () => {
+    if (!window.confirm(`Remove ${b.vendorName || "this truck"} from ${b.date}? This can't be undone.`)) return;
+    const res = await call(() => api.deleteBooking({ id: b.id }));
+    if (res) {
+      state.bookings = state.bookings.filter((x) => x.id !== b.id);
+      if (state._editingBooking === b.id) state._editingBooking = "";
+      toast("Truck removed.");
+      renderTrucks();
+    }
+  });
+
+  row.append(el("div", { class: "truck-row-main" }, info, el("div", { class: "truck-row-actions" }, editBtn, cancelBtn)));
+
+  if (editing) row.append(editTruckForm(b));
+  return row;
+}
+
+// Inline edit form for a booking: start/end time + note -> updateBooking.
+function editTruckForm(b) {
+  const form = el("div", { class: "truck-edit" });
+  const startI = el("input", { type: "time", id: `bstart-${b.id}`, value: b.startTime || LOT_START, "aria-label": "Start time" });
+  const endI = el("input", { type: "time", id: `bend-${b.id}`, value: b.endTime || LOT_END, "aria-label": "End time" });
+  const noteI = el("input", { type: "text", id: `bnote-${b.id}`, value: b.note || "", placeholder: "Note (optional) — e.g. first visit!", "aria-label": "Note" });
+  startI.addEventListener("focus", () => { typingActive = true; });
+  startI.addEventListener("blur", () => { typingActive = false; });
+  endI.addEventListener("focus", () => { typingActive = true; });
+  endI.addEventListener("blur", () => { typingActive = false; });
+  noteI.addEventListener("focus", () => { typingActive = true; });
+  noteI.addEventListener("blur", () => { typingActive = false; });
+
+  form.append(
+    el("div", { class: "time-row" },
+      el("label", { for: `bstart-${b.id}` }, "From", startI),
+      el("label", { for: `bend-${b.id}` }, "To", endI)
+    ),
+    el("label", { for: `bnote-${b.id}` }, "Note", noteI)
+  );
+
+  const save = el("button", { type: "button", class: "btn send sm" }, "Save changes");
+  save.addEventListener("click", async () => {
+    const startTime = startI.value;
+    const endTime = endI.value;
+    if (!/^\d{2}:\d{2}$/.test(startTime) || !/^\d{2}:\d{2}$/.test(endTime)) { toast("Pick a start and end time."); return; }
+    if (endTime < startTime) { toast("End time must be after the start."); return; }
+    const res = await call(() => api.updateBooking(b.id, { startTime, endTime, note: noteI.value.trim() }));
+    if (res && res.booking) {
+      const i = state.bookings.findIndex((x) => x.id === b.id);
+      if (i >= 0) state.bookings[i] = res.booking;
+      state._editingBooking = "";
+      toast("Booking updated.");
+      renderTrucks();
+    }
+  });
+  form.append(el("div", { class: "btn-row" }, save));
+  return form;
+}
+
+// Vendor lookup helpers for the day editor + add row.
+function vendorsFor(clientId) {
+  return state.vendors
+    .filter((v) => v.clientId === clientId && v.active !== false)
+    .sort((a, b) => String(a.name).localeCompare(String(b.name)));
+}
+function vendorCategory(vendorId) {
+  const v = state.vendors.find((x) => x.id === vendorId);
+  return v ? v.category : "";
+}
+
+// Add-a-truck: autocomplete over the client's registry (a <datalist>), default
+// lot hours, with a "+ add a new truck" affordance that upserts then books.
+function addTruckRow(clientId, dateISO) {
+  const wrap = el("div", { class: "add-truck" });
+  wrap.append(el("div", { class: "section-label", style: "margin:18px 0 8px" }, "Add a truck"));
+
+  const vendors = vendorsFor(clientId);
+  const listId = `vdl-${dateISO}`;
+  const datalist = el("datalist", { id: listId });
+  for (const v of vendors) datalist.append(el("option", { value: v.name }));
+
+  const nameI = el("input", { type: "text", id: `add-name-${dateISO}`, list: listId,
+    placeholder: "Search trucks or type a new name", "aria-label": "Truck", autocomplete: "off" });
+  const startI = el("input", { type: "time", id: `add-start-${dateISO}`, value: LOT_START, "aria-label": "Start time" });
+  const endI = el("input", { type: "time", id: `add-end-${dateISO}`, value: LOT_END, "aria-label": "End time" });
+  for (const inp of [nameI, startI, endI]) {
+    inp.addEventListener("focus", () => { typingActive = true; });
+    inp.addEventListener("blur", () => { typingActive = false; });
+  }
+
+  wrap.append(datalist);
+  wrap.append(el("label", { for: `add-name-${dateISO}` }, "Truck", nameI));
+  wrap.append(el("div", { class: "time-row" },
+    el("label", { for: `add-start-${dateISO}` }, "From", startI),
+    el("label", { for: `add-end-${dateISO}` }, "To", endI)
+  ));
+
+  // "+ Add a new truck" panel: appears when the typed name matches no vendor.
+  const newPanel = el("div", { class: "new-truck hidden" });
+  const catSel = el("select", { id: `add-cat-${dateISO}`, "aria-label": "Category" },
+    ...VENDOR_CATEGORIES.map((c) => el("option", { value: c }, c)));
+  const priceSel = el("select", { id: `add-price-${dateISO}`, "aria-label": "Price" },
+    ...VENDOR_PRICES.map((p) => el("option", { value: p }, p)));
+  const taglineI = el("input", { type: "text", id: `add-tag-${dateISO}`, placeholder: "Short tagline (optional)", "aria-label": "Tagline" });
+  for (const inp of [catSel, priceSel, taglineI]) {
+    inp.addEventListener("focus", () => { typingActive = true; });
+    inp.addEventListener("blur", () => { typingActive = false; });
+  }
+  newPanel.append(
+    el("div", { class: "new-truck-hint muted small" }, "New truck — it'll be saved to this client's directory."),
+    el("div", { class: "time-row" },
+      el("label", { for: `add-cat-${dateISO}` }, "Category", catSel),
+      el("label", { for: `add-price-${dateISO}` }, "Price", priceSel)
+    ),
+    el("label", { for: `add-tag-${dateISO}` }, "Tagline", taglineI)
+  );
+
+  // Show the new-truck fields only when the name doesn't match an existing vendor.
+  const syncNewPanel = () => {
+    const typed = nameI.value.trim().toLowerCase();
+    const match = vendors.find((v) => v.name.toLowerCase() === typed);
+    newPanel.classList.toggle("hidden", !typed || !!match);
+  };
+  nameI.addEventListener("input", syncNewPanel);
+
+  wrap.append(newPanel);
+
+  const addBtn = el("button", { type: "button", class: "btn primary block", style: "margin-top:12px" }, "Add to this day");
+  addBtn.addEventListener("click", async () => {
+    const typed = nameI.value.trim();
+    if (!typed) { toast("Pick a truck or type a name first."); nameI.focus(); return; }
+    const startTime = startI.value || LOT_START;
+    const endTime = endI.value || LOT_END;
+    if (endTime < startTime) { toast("End time must be after the start."); return; }
+
+    let vendor = vendors.find((v) => v.name.toLowerCase() === typed.toLowerCase());
+
+    // New truck: register it first, then book it.
+    if (!vendor) {
+      const vres = await call(() => truckApi.upsertVendor(clientId, {
+        name: typed,
+        category: catSel.value,
+        price: priceSel.value,
+        tagline: taglineI.value.trim(),
+        active: true,
+      }));
+      if (!vres || !vres.vendorId) return;
+      // The upsert only returns the id; synthesize the row locally so the very next
+      // booking + calendar render can resolve its name/category (poll reconciles).
+      vendor = {
+        id: vres.vendorId, clientId, name: typed, category: catSel.value,
+        price: priceSel.value, tagline: taglineI.value.trim(), active: true,
+      };
+      if (!state.vendors.some((v) => v.id === vendor.id)) state.vendors.push(vendor);
+    }
+
+    const res = await call(() => truckApi.addBookings(clientId, [{ vendorId: vendor.id, date: dateISO, startTime, endTime, note: "" }]));
+    if (res && Array.isArray(res.ids) && res.ids.length) {
+      // Optimistic paint: add the booking locally; the next poll reconciles.
+      state.bookings.push({
+        id: res.ids[0], clientId, vendorId: vendor.id, vendorName: vendor.name,
+        date: dateISO, startTime, endTime, note: "", seriesId: "", status: "scheduled",
+      });
+      toast(`${vendor.name} added.`);
+      nameI.value = "";
+      renderTrucks();
+    }
+  });
+  wrap.append(addBtn);
+
+  return wrap;
 }
 
 // ===================================================================
