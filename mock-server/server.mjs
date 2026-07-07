@@ -8,6 +8,8 @@ import { genId, genToken } from "../core/ids.mjs";
 import {
   validateRequestInput,
   validateEventInput,
+  validateVendorInput,
+  validateBookingInput,
   validatePin,
   publicClient,
   nextStage,
@@ -105,7 +107,14 @@ export function createApp({ storePath, uploadsDir }) {
         const c = url.searchParams.get("client") || url.searchParams.get("c");
         if (admin != null) {
           if (admin !== data.settings?.adminToken) return send(res, 403, { ok: false, error: "bad admin token" });
-          return send(res, 200, { ok: true, clients: data.clients, requests: data.requests, events: data.events });
+          return send(res, 200, {
+            ok: true,
+            clients: data.clients,
+            requests: data.requests,
+            events: data.events,
+            vendors: data.vendors || [],
+            bookings: data.bookings || [],
+          });
         }
         if (c != null) {
           const client = data.clients.find((x) => x.token === c && x.active !== false);
@@ -117,6 +126,8 @@ export function createApp({ storePath, uploadsDir }) {
             client: publicClient(client),
             requests: data.requests.filter((r) => r.clientId === client.clientId),
             events: data.events.filter((e) => e.clientId === client.clientId),
+            vendors: (data.vendors || []).filter((v) => v.clientId === client.clientId && v.active !== false),
+            bookings: (data.bookings || []).filter((b) => b.clientId === client.clientId && b.status !== "cancelled"),
           });
         }
         return send(res, 400, { ok: false, error: "missing token" });
@@ -131,10 +142,16 @@ export function createApp({ storePath, uploadsDir }) {
 
         if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].includes(action) && !adminOk)
           return send(res, 403, { ok: false, error: "admin required" });
-        if (["submitRequest", "addEvent", "uploadAttachment", "postMessage"].includes(action) && !client && !adminOk)
+        if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].includes(action) && !client && !adminOk)
           return send(res, 403, { ok: false, error: "client link required" });
 
         const result = await store.tx(async (data) => {
+          // Old stores predate the food-truck feature; keep the arrays present.
+          if (!Array.isArray(data.vendors)) data.vendors = [];
+          if (!Array.isArray(data.bookings)) data.bookings = [];
+          // Tenant is FORCED from the auth'd client token for tenant-scoped writes;
+          // a body clientId is honored only for admin (mirrors submitRequest/addEvent).
+          const ftClientId = adminOk ? (body.clientId || client?.clientId) : client?.clientId;
           switch (action) {
             case "submitRequest": {
               // Tenant is FORCED from the authenticated client token; a body clientId is
@@ -287,6 +304,76 @@ export function createApp({ storePath, uploadsDir }) {
               ev.requestId = id;
               ev.updatedAt = now();
               return { code: 200, obj: { ok: true, requestId: id } };
+            }
+            case "upsertVendor": {
+              const v = validateVendorInput({ ...body.vendor, clientId: ftClientId });
+              if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
+              const i = data.vendors.findIndex((x) => x.id === v.value.id && x.clientId === v.value.clientId);
+              if (i >= 0) {
+                data.vendors[i] = { ...data.vendors[i], ...v.value, updatedAt: now() };
+              } else {
+                data.vendors.push({ ...v.value, createdAt: now(), updatedAt: now() });
+              }
+              return { code: 200, obj: { ok: true, vendorId: v.value.id } };
+            }
+            case "addBookings": {
+              const list = Array.isArray(body.bookings) ? body.bookings : [];
+              // Only this client's active vendors may be booked (validateBookingInput
+              // resolves + snapshots the vendor name from here).
+              const scopedVendors = data.vendors.filter((x) => x.clientId === ftClientId);
+              const seriesId = String(body.seriesId || "").trim();
+              const validated = [];
+              for (const b of list) {
+                const vb = validateBookingInput({ ...b, clientId: ftClientId }, scopedVendors);
+                if (!vb.ok) return { code: 400, obj: { ok: false, errors: vb.errors } };
+                validated.push(vb.value);
+              }
+              // Atomic: nothing inserted unless every booking validated.
+              const ids = [];
+              for (const value of validated) {
+                const id = genId("bkg");
+                ids.push(id);
+                data.bookings.push({
+                  id,
+                  ...value,
+                  seriesId,
+                  status: "scheduled",
+                  createdAt: now(),
+                  updatedAt: now(),
+                });
+              }
+              return { code: 200, obj: { ok: true, ids } };
+            }
+            case "updateBooking": {
+              const idx = data.bookings.findIndex((b) => b.id === body.id && (adminOk || b.clientId === ftClientId));
+              if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
+              const cur = data.bookings[idx];
+              const patch = { ...(body.patch || {}) };
+              // Identity fields are immutable through a patch (only time/note/status).
+              delete patch.id;
+              delete patch.clientId;
+              delete patch.vendorId;
+              delete patch.vendorName;
+              delete patch.createdAt;
+              delete patch.seriesId;
+              data.bookings[idx] = mergePatch(cur, patch, now());
+              return { code: 200, obj: { ok: true, booking: data.bookings[idx] } };
+            }
+            case "deleteBooking": {
+              const seriesId = String(body.seriesId || "").trim();
+              if (seriesId) {
+                const before = data.bookings.length;
+                data.bookings = data.bookings.filter(
+                  (b) => !(b.seriesId === seriesId && (adminOk || b.clientId === ftClientId))
+                );
+                const deleted = before - data.bookings.length;
+                if (deleted === 0) return { code: 404, obj: { ok: false, error: "not found" } };
+                return { code: 200, obj: { ok: true, deleted } };
+              }
+              const idx = data.bookings.findIndex((b) => b.id === body.id && (adminOk || b.clientId === ftClientId));
+              if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
+              const [removed] = data.bookings.splice(idx, 1);
+              return { code: 200, obj: { ok: true, id: removed.id, deleted: 1 } };
             }
             case "upsertClient": {
               const cl = body.client || {};

@@ -31,6 +31,12 @@ export const portalApi = (clientToken, pin = "") => ({
   addEvent: (event) => http("POST", "", { c: clientToken, action: "addEvent", event }),
   upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }),
   message: (id, text) => http("POST", "", { c: clientToken, action: "postMessage", id, text }),
+  // Food Trucks: registry + schedule. addBookings is one round-trip (repeat-weekly is
+  // atomic); deleteBooking takes { id } or { seriesId } to drop a whole series.
+  upsertVendor: (vendor) => http("POST", "", { c: clientToken, action: "upsertVendor", vendor }),
+  addBookings: (bookings, seriesId) => http("POST", "", { c: clientToken, action: "addBookings", bookings, seriesId }),
+  updateBooking: (id, patch) => http("POST", "", { c: clientToken, action: "updateBooking", id, patch }),
+  deleteBooking: (sel) => http("POST", "", { c: clientToken, action: "deleteBooking", ...(sel || {}) }),
 });
 
 // Request Desk — admin token in the URL (?k=…).
@@ -41,6 +47,11 @@ export const deskApi = (adminToken) => ({
   upsertClient: (client) => http("POST", "", { admin: adminToken, action: "upsertClient", client }),
   remove: (id) => http("POST", "", { admin: adminToken, action: "deleteRequest", id }),
   message: (id, text) => http("POST", "", { admin: adminToken, action: "postMessage", id, text }),
+  // Food Trucks (admin token). deleteBooking takes { id } or { seriesId }.
+  upsertVendor: (vendor) => http("POST", "", { admin: adminToken, action: "upsertVendor", vendor }),
+  addBookings: (bookings, seriesId) => http("POST", "", { admin: adminToken, action: "addBookings", bookings, seriesId }),
+  updateBooking: (id, patch) => http("POST", "", { admin: adminToken, action: "updateBooking", id, patch }),
+  deleteBooking: (sel) => http("POST", "", { admin: adminToken, action: "deleteBooking", ...(sel || {}) }),
 });
 
 // Downscale + re-encode large images IN THE BROWSER before upload. Phone photos run

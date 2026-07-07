@@ -94,6 +94,77 @@ export function validateEventInput(input) {
   return { ok: true, errors: [], value: { clientId, title, date, time, endTime, description: String(input.description || "").trim() } };
 }
 
+export const VENDOR_PRICES = ["$", "$$", "$$$"];
+export const BOOKING_STATUSES = ["scheduled", "cancelled"];
+
+const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+// Stable, url-safe slug from a display name (mirrors Code.gs slugId_). Used as the
+// vendor id when the caller does not supply one, so the website directory and the
+// backend registry key on the same human-readable id.
+export function slugId(name) {
+  return String(name || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+export function validateVendorInput(input) {
+  const errors = [];
+  if (!input || typeof input !== "object") return { ok: false, errors: ["missing input"] };
+  const clientId = String(input.clientId || "").trim();
+  if (!clientId) errors.push("clientId required");
+  const name = String(input.name || "").trim();
+  if (!name) errors.push("name required");
+  const category = String(input.category || "").trim();
+  if (!category) errors.push("category required");
+  const price = String(input.price || "").trim();
+  if (!VENDOR_PRICES.includes(price)) errors.push(`price must be one of ${VENDOR_PRICES.join(", ")}`);
+  if (errors.length) return { ok: false, errors };
+  const id = String(input.id || "").trim() || slugId(name);
+  const active = input.active == null ? true : !!input.active;
+  return {
+    ok: true,
+    errors: [],
+    value: { id, clientId, name, category, price, tagline: String(input.tagline || "").trim(), active },
+  };
+}
+
+// Validate one booking against the vendor registry. `vendors` is the list of the
+// client's vendors (already scoped) — vendorId must resolve to an ACTIVE one, whose
+// name is snapshotted into the booking (resilient to a later vendor rename).
+export function validateBookingInput(input, vendors = []) {
+  const errors = [];
+  if (!input || typeof input !== "object") return { ok: false, errors: ["missing input"] };
+  const clientId = String(input.clientId || "").trim();
+  if (!clientId) errors.push("clientId required");
+  const vendorId = String(input.vendorId || "").trim();
+  const vendor = vendors.find((v) => v.id === vendorId && v.clientId === clientId && v.active !== false);
+  if (!vendorId) errors.push("vendorId required");
+  else if (!vendor) errors.push("vendorId must resolve to an active vendor");
+  const date = String(input.date || "").trim();
+  if (!isIsoDate(date)) errors.push("date must be YYYY-MM-DD");
+  const startTime = String(input.startTime || "").trim() || "09:00";
+  if (!HHMM.test(startTime)) errors.push("startTime must be HH:MM (24-hour)");
+  const endTime = String(input.endTime || "").trim() || "17:00";
+  if (!HHMM.test(endTime)) errors.push("endTime must be HH:MM (24-hour)");
+  if (HHMM.test(startTime) && HHMM.test(endTime) && endTime < startTime) errors.push("endTime must be >= startTime");
+  if (errors.length) return { ok: false, errors };
+  return {
+    ok: true,
+    errors: [],
+    value: {
+      clientId,
+      vendorId,
+      vendorName: vendor ? vendor.name : "",
+      date,
+      startTime,
+      endTime,
+      note: String(input.note || "").trim(),
+    },
+  };
+}
+
 // Which skill the worker drain should reach for, given the request type + text.
 export function routeSkill(type, description = "") {
   const d = String(description).toLowerCase();

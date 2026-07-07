@@ -390,3 +390,164 @@ test("[Code.gs mirror] Sheets time/date cells normalize to HH:MM / YYYY-MM-DD st
   assert.equal(normalizeDateCellMirror("2026-07-04", "UTC"), "2026-07-04");
   assert.equal(normalizeDateCellMirror("", "UTC"), "");
 });
+
+/* ============================ Food Trucks: vendors + bookings ============================ */
+
+test("upsertVendor creates a vendor (slug id from name) and it appears in doGet payloads", async () => {
+  const r = await post({
+    c: "tok-o", action: "upsertVendor",
+    vendor: { name: "Island Boys Food Truck", category: "CARIBBEAN", price: "$$", tagline: "Jerk chicken and island plates" },
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.vendorId, "island-boys-food-truck"); // slug from name
+  // client view carries active vendors
+  const cv = await get("?c=tok-o");
+  assert.ok(Array.isArray(cv.body.vendors));
+  const v = cv.body.vendors.find((x) => x.id === "island-boys-food-truck");
+  assert.equal(v.name, "Island Boys Food Truck");
+  assert.equal(v.category, "CARIBBEAN");
+  assert.equal(v.price, "$$");
+  assert.equal(v.clientId, "the-o");
+  assert.equal(v.active, true);
+  assert.ok(v.createdAt && v.updatedAt);
+  // admin view carries all vendors + bookings arrays
+  const av = await get("?admin=testadmin");
+  assert.ok(Array.isArray(av.body.vendors));
+  assert.ok(Array.isArray(av.body.bookings));
+  assert.ok(av.body.vendors.some((x) => x.id === "island-boys-food-truck"));
+});
+
+test("upsertVendor with an explicit id updates the existing row (no duplicate); bad price rejected", async () => {
+  const created = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Smokin BBQ", category: "BBQ", price: "$$" } });
+  assert.equal(created.status, 200);
+  const id = created.body.vendorId;
+  const upd = await post({ c: "tok-o", action: "upsertVendor", vendor: { id, name: "Smokin BBQ Chateau", category: "BBQ", price: "$$$", tagline: "low & slow" } });
+  assert.equal(upd.status, 200);
+  assert.equal(upd.body.vendorId, id);
+  const av = await get("?admin=testadmin");
+  const rows = av.body.vendors.filter((x) => x.id === id);
+  assert.equal(rows.length, 1); // updated in place, not duplicated
+  assert.equal(rows[0].name, "Smokin BBQ Chateau");
+  assert.equal(rows[0].price, "$$$");
+  const bad = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Nope", category: "X", price: "cheap" } });
+  assert.equal(bad.status, 400);
+});
+
+test("inactive vendors are hidden from the client view but present in admin", async () => {
+  const created = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Retired Truck", category: "TACOS", price: "$" } });
+  const id = created.body.vendorId;
+  await post({ c: "tok-o", action: "upsertVendor", vendor: { id, name: "Retired Truck", category: "TACOS", price: "$", active: false } });
+  const cv = await get("?c=tok-o");
+  assert.equal(cv.body.vendors.find((x) => x.id === id), undefined);
+  const av = await get("?admin=testadmin");
+  assert.equal(av.body.vendors.find((x) => x.id === id).active, false);
+});
+
+test("addBookings batch-inserts, applies time defaults, snapshots vendorName, and validates each", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Taco Truck", category: "TACOS", price: "$$" } });
+  const vendorId = ven.body.vendorId;
+  const r = await post({
+    c: "tok-o", action: "addBookings",
+    bookings: [
+      { vendorId, date: "2026-07-11" }, // defaults 09:00-17:00
+      { vendorId, date: "2026-07-18", startTime: "11:00", endTime: "19:00", note: "first visit!" },
+    ],
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ok, true);
+  assert.equal(r.body.ids.length, 2);
+  const cv = await get("?c=tok-o");
+  assert.equal(cv.body.bookings.length, 2);
+  const b0 = cv.body.bookings.find((b) => b.date === "2026-07-11");
+  assert.equal(b0.startTime, "09:00");
+  assert.equal(b0.endTime, "17:00");
+  assert.equal(b0.vendorId, vendorId);
+  assert.equal(b0.vendorName, "Taco Truck"); // denormalized snapshot
+  assert.equal(b0.status, "scheduled");
+  assert.equal(b0.clientId, "the-o");
+  const b1 = cv.body.bookings.find((b) => b.date === "2026-07-18");
+  assert.equal(b1.startTime, "11:00");
+  assert.equal(b1.endTime, "19:00");
+  assert.equal(b1.note, "first visit!");
+});
+
+test("addBookings rejects the whole batch if any booking is invalid (unknown vendor / bad time / endTime<startTime / bad date)", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Churro Cart", category: "DESSERTS", price: "$" } });
+  const vendorId = ven.body.vendorId;
+  // unknown vendor
+  assert.equal((await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId: "ghost", date: "2026-07-11" }] })).status, 400);
+  // bad time
+  assert.equal((await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId, date: "2026-07-11", startTime: "25:00" }] })).status, 400);
+  // endTime < startTime
+  assert.equal((await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId, date: "2026-07-11", startTime: "17:00", endTime: "09:00" }] })).status, 400);
+  // bad date
+  assert.equal((await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId, date: "July 11" }] })).status, 400);
+  // nothing was inserted for this vendor (mock store is shared across tests, so
+  // scope the assertion to the Churro Cart's own bookings rather than the total).
+  const cv = await get("?c=tok-o");
+  assert.equal(cv.body.bookings.filter((b) => b.vendorId === vendorId).length, 0);
+});
+
+test("addBookings groups a repeat-weekly series under a shared seriesId", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Weekly Truck", category: "TACOS", price: "$" } });
+  const vendorId = ven.body.vendorId;
+  const r = await post({
+    c: "tok-o", action: "addBookings", seriesId: "series-abc",
+    bookings: [
+      { vendorId, date: "2026-07-07" },
+      { vendorId, date: "2026-07-14" },
+      { vendorId, date: "2026-07-21" },
+    ],
+  });
+  assert.equal(r.status, 200);
+  assert.equal(r.body.ids.length, 3);
+  const cv = await get("?c=tok-o");
+  assert.equal(cv.body.bookings.filter((b) => b.seriesId === "series-abc").length, 3);
+});
+
+test("updateBooking merges a patch (time/note/status) and stamps updatedAt", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Edit Truck", category: "BBQ", price: "$$" } });
+  const add = await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId: ven.body.vendorId, date: "2026-07-11" }] });
+  const id = add.body.ids[0];
+  const before = (await get("?c=tok-o")).body.bookings.find((b) => b.id === id).updatedAt;
+  const upd = await post({ c: "tok-o", action: "updateBooking", id, patch: { startTime: "12:00", note: "moved later" } });
+  assert.equal(upd.status, 200);
+  const row = (await get("?c=tok-o")).body.bookings.find((b) => b.id === id);
+  assert.equal(row.startTime, "12:00");
+  assert.equal(row.note, "moved later");
+  assert.ok(row.updatedAt >= before);
+  // cancelling removes it from the client's scheduled view
+  const cancel = await post({ c: "tok-o", action: "updateBooking", id, patch: { status: "cancelled" } });
+  assert.equal(cancel.status, 200);
+  assert.equal((await get("?c=tok-o")).body.bookings.find((b) => b.id === id), undefined);
+  // still visible to admin as cancelled
+  assert.equal((await get("?admin=testadmin")).body.bookings.find((b) => b.id === id).status, "cancelled");
+  // missing id 404s
+  assert.equal((await post({ c: "tok-o", action: "updateBooking", id: "bkg_nope", patch: {} })).status, 404);
+});
+
+test("deleteBooking removes a single booking by id", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Del Truck", category: "BBQ", price: "$" } });
+  const add = await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId: ven.body.vendorId, date: "2026-07-11" }] });
+  const id = add.body.ids[0];
+  const del = await post({ c: "tok-o", action: "deleteBooking", id });
+  assert.equal(del.status, 200);
+  assert.equal((await get("?admin=testadmin")).body.bookings.find((b) => b.id === id), undefined);
+  assert.equal((await post({ c: "tok-o", action: "deleteBooking", id: "bkg_nope" })).status, 404);
+});
+
+test("deleteBooking by seriesId removes the whole series", async () => {
+  const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Series Truck", category: "TACOS", price: "$" } });
+  const vendorId = ven.body.vendorId;
+  await post({ c: "tok-o", action: "addBookings", seriesId: "wipe-me", bookings: [
+    { vendorId, date: "2026-09-07" }, { vendorId, date: "2026-09-14" },
+  ] });
+  const standalone = await post({ c: "tok-o", action: "addBookings", bookings: [{ vendorId, date: "2026-09-21" }] }); // standalone, survives
+  const del = await post({ c: "tok-o", action: "deleteBooking", seriesId: "wipe-me" });
+  assert.equal(del.status, 200);
+  assert.equal(del.body.deleted, 2);
+  const av = await get("?admin=testadmin");
+  assert.equal(av.body.bookings.filter((b) => b.seriesId === "wipe-me").length, 0);
+  assert.equal(av.body.bookings.filter((b) => b.id === standalone.body.ids[0]).length, 1);
+});

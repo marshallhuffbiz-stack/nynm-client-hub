@@ -8,7 +8,7 @@ import { dirname } from "node:path";
 export function createStore(path) {
   let queue = Promise.resolve();
 
-  const empty = () => ({ settings: {}, clients: [], requests: [], events: [] });
+  const empty = () => ({ settings: {}, clients: [], requests: [], events: [], vendors: [], bookings: [] });
 
   async function read() {
     if (!existsSync(path)) return empty();
