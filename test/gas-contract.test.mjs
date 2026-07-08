@@ -312,6 +312,34 @@ test("uploadAttachment: 413 guard on oversized base64; small file lands in Drive
   assert.equal(h.post({ action: "uploadAttachment", file: { name: "x", dataBase64: b64 } }).status, 403);
 });
 
+test("uploadAttachment: a Drive failure returns a specific 502 with the real reason, not a generic crash", () => {
+  const h = createHarness();
+  // Simulate a full/over-quota Drive (or a lost folder permission): createFile throws.
+  // Before the fix this bubbled to doPost's bare 500 and the client only saw "That didn't send".
+  h.stubs.DriveApp.createFolder = () => ({
+    getId: () => "fold_fail",
+    createFile: () => { throw new Error("Limit Exceeded: Drive storage quota."); },
+  });
+  const b64 = Buffer.from("logo-bytes").toString("base64");
+  const res = h.post({ c: TOK_O, action: "uploadAttachment", file: { name: "logo.png", mime: "image/png", dataBase64: b64 } });
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 502);                        // specific code, not the generic 500 crash
+  assert.match(res.error, /couldn't save your photo/i); // client-readable, not a raw stack
+  assert.match(res.error, /storage is full/i);          // quota error mapped to plain language
+  assert.equal(h.drive.files.length, 0);                // nothing half-written
+});
+
+test("submitRequest: a sheet-write failure returns a specific 502 with the real reason, not a generic crash", () => {
+  const h = createHarness();
+  // Simulate a transient Sheets write failure on the append.
+  h.context.appendRow_ = () => { throw new Error("Service Spreadsheets timed out"); };
+  const res = h.post({ c: TOK_O, action: "submitRequest", request: { type: "post", description: "please post this" }, clientRequestId: "cli_io_fail_1" });
+  assert.equal(res.ok, false);
+  assert.equal(res.status, 502);
+  assert.match(res.error, /couldn't save your request/i);
+  assert.match(res.error, /took too long/i);            // timeout error mapped to plain language
+});
+
 /* ============================ deleteRequest + upsertClient ============================ */
 
 test("deleteRequest removes the row (admin only); 404 for a missing id", () => {

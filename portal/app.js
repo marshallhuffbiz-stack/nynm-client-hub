@@ -848,10 +848,13 @@ async function uploadOne(file) {
       pendingAttachments.push({ name: res.name || file.name, url: res.url, mime: res.mime || file.type || "" });
       renderThumbs();
     } else {
-      toast(`Couldn't upload "${file.name || "that photo"}" — try again.`);
+      console.error("upload failed", res);
+      const why = res && res.error ? ` ${res.error}` : "";
+      toast(`Couldn't upload "${file.name || "that photo"}".${why || " Please try again."}`);
     }
   } catch (err) {
-    toast(`Couldn't upload "${file.name || "that photo"}" — try again.`);
+    console.error("upload error", err);
+    toast(`Couldn't upload "${file.name || "that photo"}" — check your connection and try again.`);
   } finally {
     uploadingCount = Math.max(0, uploadingCount - 1);
     updateUploadStatus();
@@ -917,10 +920,13 @@ async function submitRequest(event) {
       toast("Request sent. We'll take it from here.");
       refresh(); // deliberately not awaited — the button unlocks right away
     } else {
-      toast("That didn't send. Please try again.");
+      console.error("submit failed", res);
+      const why = res && res.error ? ` ${res.error}` : (res && res.errors ? ` ${res.errors.join(", ")}` : "");
+      toast(`That didn't send.${why || " Please try again."}`);
     }
   } catch (err) {
-    toast("That didn't send. Please try again.");
+    console.error("submit error", err);
+    toast("That didn't send — check your connection and try again.");
   } finally {
     setBusy(false, reqSubmit, "Submit request");
   }
@@ -1501,12 +1507,15 @@ requestsList.addEventListener("click", async (e) => {
       if (res.request) updateLocalRequest(res.request);
       else refresh();
     } else {
-      toast("That didn't send. Please try again.");
+      console.error("message send failed", res);
+      const why = res && res.error ? ` ${res.error}` : "";
+      toast(`That didn't send.${why || " Please try again."}`);
       btn.disabled = false;
       btn.textContent = "Send";
     }
   } catch (err) {
-    toast("That didn't send. Please try again.");
+    console.error("message send error", err);
+    toast("That didn't send — check your connection and try again.");
     btn.disabled = false;
     btn.textContent = "Send";
   }

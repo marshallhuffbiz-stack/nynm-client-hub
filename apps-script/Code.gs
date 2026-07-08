@@ -614,6 +614,25 @@ function getUploadFolder_() {
   return folder;
 }
 
+// Turn a raw Drive/Sheets exception into a short, client-readable reason. The generic
+// doPost catch used to bubble these as a bare 500, so a client only ever saw
+// "That didn't send" with no way to know it was (say) a full Drive or a lost folder.
+// The original message is kept as a fallback so support still sees the specifics.
+function humanIoError_(err) {
+  var m = String((err && err.message) || err || "");
+  var low = m.toLowerCase();
+  if (low.indexOf("limit exceeded") >= 0 || low.indexOf("quota") >= 0 || low.indexOf("storage") >= 0) {
+    return "storage is full on our end — please try again shortly.";
+  }
+  if (low.indexOf("permission") >= 0 || low.indexOf("access") >= 0 || low.indexOf("not found") >= 0) {
+    return "a storage-permission issue on our end — please try again shortly.";
+  }
+  if (low.indexOf("timeout") >= 0 || low.indexOf("timed out") >= 0 || low.indexOf("maximum execution") >= 0) {
+    return "that took too long to save — please try again (a smaller photo goes right through).";
+  }
+  return (m || "an unexpected error") + " — please try again.";
+}
+
 /* ============================ doGet ============================ */
 
 function doGet(e) {
@@ -849,7 +868,13 @@ function handleSubmitRequest_(body, client) {
     updatedAt: now_(),
     meta: { clientRequestId: body.clientRequestId || "", activity: [{ at: now_(), kind: "created", text: "submitted via portal" }] }
   };
-  appendRow_(SHEET_REQUESTS, rec);
+  try {
+    appendRow_(SHEET_REQUESTS, rec);
+  } catch (saveErr) {
+    // A sheet-write failure (lost permission, quota, transient Sheets error) used to
+    // surface as a bare 500 → generic "That didn't send". Give the real reason.
+    return { code: 502, obj: { ok: false, error: "couldn't save your request — " + humanIoError_(saveErr) } };
+  }
   return { code: 200, obj: { ok: true, id: id } };
 }
 
@@ -890,10 +915,17 @@ function handleUploadAttachment_(body) {
   var safe = String(file.name || "file").replace(/[^a-zA-Z0-9._-]/g, "_");
   var fname = genId_("att") + "-" + safe;
   var mime = file.mime || "";
-  var bytes = Utilities.base64Decode(String(file.dataBase64 || ""));
-  var blob = Utilities.newBlob(bytes, mime || "application/octet-stream", fname);
-  var folder = getUploadFolder_();
-  var driveFile = folder.createFile(blob);
+  var driveFile;
+  try {
+    var bytes = Utilities.base64Decode(String(file.dataBase64 || ""));
+    var blob = Utilities.newBlob(bytes, mime || "application/octet-stream", fname);
+    var folder = getUploadFolder_();
+    driveFile = folder.createFile(blob);
+  } catch (saveErr) {
+    // Drive throws here on a full/over-quota account, a lost folder permission, or a
+    // slow-upload timeout. Return the real reason instead of the generic doPost 500.
+    return { code: 502, obj: { ok: false, error: "couldn't save your photo — " + humanIoError_(saveErr) } };
+  }
   // Anyone-with-link can view (so the portal/desk can preview the attachment).
   try {
     driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
