@@ -89,7 +89,7 @@ export const deskApi = (adminToken) => ({
 // GIFs, and already-small images pass through untouched. Best-effort: ANY failure
 // (or no size win) falls back to the original file, so this can never make an upload
 // worse — at worst it's a no-op.
-export async function compressImage(file, { maxEdge = 2000, quality = 0.82, skipUnder = 600 * 1024 } = {}) {
+export async function compressImage(file, { maxEdge = 1600, quality = 0.72, skipUnder = 300 * 1024 } = {}) {
   try {
     if (!file || !/^image\//.test(file.type) || file.type === "image/gif") return file;
     if (file.size <= skipUnder) return file;

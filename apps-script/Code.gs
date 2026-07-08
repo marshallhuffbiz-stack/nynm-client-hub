@@ -104,6 +104,7 @@ var TRANSITIONS = {
 
 var PROP_ADMIN_TOKEN = "ADMIN_TOKEN";
 var PROP_UPLOAD_FOLDER_ID = "UPLOAD_FOLDER_ID";
+var PROP_UPLOAD_FOLDER_SHARED = "UPLOAD_FOLDER_SHARED";
 var UPLOAD_FOLDER_NAME = "Client Hub Uploads";
 
 /* ============================ Small helpers ============================ */
@@ -606,11 +607,25 @@ function safeEquals_(a, b) {
 function getUploadFolder_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(PROP_UPLOAD_FOLDER_ID);
+  var folder = null;
   if (id) {
-    try { return DriveApp.getFolderById(id); } catch (e) { /* fall through, recreate */ }
+    try { folder = DriveApp.getFolderById(id); } catch (e) { folder = null; }
   }
-  var folder = DriveApp.createFolder(UPLOAD_FOLDER_NAME);
-  props.setProperty(PROP_UPLOAD_FOLDER_ID, folder.getId());
+  if (!folder) {
+    folder = DriveApp.createFolder(UPLOAD_FOLDER_NAME);
+    props.setProperty(PROP_UPLOAD_FOLDER_ID, folder.getId());
+    props.deleteProperty(PROP_UPLOAD_FOLDER_SHARED);
+  }
+  // Share the FOLDER link-public ONCE; files created inside inherit view access. This lets
+  // handleUploadAttachment_ skip the per-file setSharing() call — that per-file Drive op was
+  // the slow one that pushed uploads to ~30s. Best-effort: if the account restricts link
+  // sharing, files stay owner-visible but the upload itself still succeeds fast.
+  if (props.getProperty(PROP_UPLOAD_FOLDER_SHARED) !== "1") {
+    try {
+      folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+      props.setProperty(PROP_UPLOAD_FOLDER_SHARED, "1");
+    } catch (e) { /* sharing restricted; leave unshared, upload still works */ }
+  }
   return folder;
 }
 
@@ -730,7 +745,16 @@ function doPost(e) {
       return json_(403, { ok: false, error: "client link required" });
     }
 
-    // All writes serialized under the script lock (the GAS analog of the mock's
+    // Uploads create an independent Drive file and mutate NO shared sheet state, so they must
+    // NOT take the global write lock. Holding it during the (slow) Drive write serialized every
+    // request behind each upload and pushed uploads past the 30s lock timeout — the root cause
+    // of the ~30s "it won't send" symptom. Handle uploads lock-free, up front.
+    if (action === "uploadAttachment") {
+      var upRes = handleUploadAttachment_(body);
+      return json_(upRes.code, upRes.obj);
+    }
+
+    // All OTHER writes serialized under the script lock (the GAS analog of the mock's
     // file lock / store.tx read-merge-write transaction).
     var lock = LockService.getScriptLock();
     try {
@@ -747,9 +771,6 @@ function doPost(e) {
           break;
         case "addEvent":
           result = handleAddEvent_(body, clientForAuth);
-          break;
-        case "uploadAttachment":
-          result = handleUploadAttachment_(body);
           break;
         case "updateRequest":
           result = handleUpdateRequest_(body);
@@ -926,15 +947,18 @@ function handleUploadAttachment_(body) {
     // slow-upload timeout. Return the real reason instead of the generic doPost 500.
     return { code: 502, obj: { ok: false, error: "couldn't save your photo — " + humanIoError_(saveErr) } };
   }
-  // Anyone-with-link can view (so the portal/desk can preview the attachment).
-  try {
-    driveFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
-  } catch (shareErr) {
-    // Some domains restrict link-sharing; URL still returned, owner-visible.
-  }
+  // No per-file setSharing() — the parent folder is already link-public (getUploadFolder_),
+  // so the file inherits view access. Return a DIRECT-image URL (the old getUrl() was a Drive
+  // viewer *page*, which never rendered in the <img> thumbnail).
+  var fid = driveFile.getId();
   return {
     code: 200,
-    obj: { ok: true, url: driveFile.getUrl(), name: file.name || safe, mime: mime }
+    obj: {
+      ok: true,
+      url: "https://drive.google.com/thumbnail?id=" + fid + "&sz=w1200",
+      name: file.name || safe,
+      mime: mime
+    }
   };
 }
 

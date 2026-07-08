@@ -296,6 +296,7 @@ export function createHarness(opts = {}) {
     const id = "fold_" + randomUUID().replace(/-/g, "").slice(0, 12);
     const folder = strict("Folder", {
       getId: () => id,
+      setSharing: () => {},
       createFile: (blob) => {
         const fid = "file_" + randomUUID().replace(/-/g, "").slice(0, 12);
         drive.files.push({ id: fid, folderId: id, blob });

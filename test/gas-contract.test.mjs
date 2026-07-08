@@ -302,7 +302,8 @@ test("uploadAttachment: 413 guard on oversized base64; small file lands in Drive
   const b64 = Buffer.from("hello-pixels").toString("base64");
   const up = h.post({ c: TOK_O, action: "uploadAttachment", file: { name: "shot.txt", mime: "text/plain", dataBase64: b64 } });
   assert.equal(up.status, 200);
-  assert.match(up.url, /drive\.google\.com/);
+  // Direct-image thumbnail URL (renders in an <img>), not the old Drive viewer *page*.
+  assert.match(up.url, /drive\.google\.com\/thumbnail\?id=/);
   assert.equal(up.name, "shot.txt");
   assert.equal(up.mime, "text/plain");
   // the REAL bytes made it through Utilities.base64Decode -> newBlob -> createFile
@@ -318,6 +319,7 @@ test("uploadAttachment: a Drive failure returns a specific 502 with the real rea
   // Before the fix this bubbled to doPost's bare 500 and the client only saw "That didn't send".
   h.stubs.DriveApp.createFolder = () => ({
     getId: () => "fold_fail",
+    setSharing: () => {},
     createFile: () => { throw new Error("Limit Exceeded: Drive storage quota."); },
   });
   const b64 = Buffer.from("logo-bytes").toString("base64");
