@@ -1,35 +1,62 @@
 // Browser API client. Talks to API_BASE (mock locally, Apps Script in prod).
 import { API_BASE } from "./config.js";
 
-async function http(method, query, body) {
-  const res = await fetch(API_BASE + (query || ""), {
-    method,
-    // text/plain keeps POSTs as "simple" CORS requests (no preflight), which is
-    // required for the live Apps Script backend. The server parses the JSON body
-    // regardless of content-type, so this works for both mock and live.
-    headers: body ? { "content-type": "text/plain;charset=utf-8" } : undefined,
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  let data;
-  try {
-    data = await res.json();
-  } catch {
-    data = { ok: false, error: "bad json from server" };
+const RETRY_MS = [400, 900]; // backoff before the 1st and 2nd retry
+
+// opts.retries: how many times to re-try a TRANSIENT failure (mobile network drop,
+// the 30s script-lock "busy, try again" 409, or a 5xx). Only callers whose action is
+// safe to repeat opt in — submit is idempotent via clientRequestId; a duplicate upload
+// is at worst a harmless orphan file. All other callers pass no opts → retries: 0 →
+// behaviour is unchanged. On final network failure we still throw (contract preserved).
+async function http(method, query, body, opts) {
+  const retries = (opts && opts.retries) || 0;
+  const retryOn = (opts && opts.retryOn) || [409, 429, 500, 502, 503, 504];
+  let attempt = 0;
+  for (;;) {
+    let res;
+    try {
+      res = await fetch(API_BASE + (query || ""), {
+        method,
+        // text/plain keeps POSTs as "simple" CORS requests (no preflight), which is
+        // required for the live Apps Script backend. The server parses the JSON body
+        // regardless of content-type, so this works for both mock and live.
+        headers: body ? { "content-type": "text/plain;charset=utf-8" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (netErr) {
+      if (attempt < retries) {
+        await new Promise((r) => setTimeout(r, RETRY_MS[attempt] || 900));
+        attempt += 1;
+        continue;
+      }
+      throw netErr;
+    }
+    let data;
+    try {
+      data = await res.json();
+    } catch {
+      data = { ok: false, error: "bad json from server" };
+    }
+    // Mock returns real HTTP statuses; live Apps Script always returns 200 and
+    // carries the intended status in the body. Prefer the body status when present
+    // so the UIs behave identically in both modes.
+    const status = typeof data.status === "number" ? data.status : res.status;
+    if (attempt < retries && retryOn.indexOf(status) >= 0) {
+      await new Promise((r) => setTimeout(r, RETRY_MS[attempt] || 900));
+      attempt += 1;
+      continue;
+    }
+    return { ...data, status };
   }
-  // Mock returns real HTTP statuses; live Apps Script always returns 200 and
-  // carries the intended status in the body. Prefer the body status when present
-  // so the UIs behave identically in both modes.
-  const status = typeof data.status === "number" ? data.status : res.status;
-  return { ...data, status };
 }
 
 // Client Portal — secret token in the URL (?c=…), optional PIN.
 export const portalApi = (clientToken, pin = "") => ({
   load: () =>
     http("GET", `?client=${encodeURIComponent(clientToken)}${pin ? `&pin=${encodeURIComponent(pin)}` : ""}`),
-  submit: (request, clientRequestId) => http("POST", "", { c: clientToken, action: "submitRequest", request, clientRequestId }),
+  submit: (request, clientRequestId) => http("POST", "", { c: clientToken, action: "submitRequest", request, clientRequestId }, { retries: 2 }),
   addEvent: (event) => http("POST", "", { c: clientToken, action: "addEvent", event }),
-  upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }),
+  upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }, { retries: 1 }),
   message: (id, text) => http("POST", "", { c: clientToken, action: "postMessage", id, text }),
   // Food Trucks: registry + schedule. addBookings is one round-trip (repeat-weekly is
   // atomic); deleteBooking takes { id } or { seriesId } to drop a whole series.
