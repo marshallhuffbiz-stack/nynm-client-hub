@@ -1,7 +1,7 @@
 // Client Hub — pure domain logic. No I/O. Shared by the mock server, the worker,
 // and mirrored by apps-script/Code.gs. TDD'd in model.test.mjs.
 
-export const REQUEST_TYPES = ["post", "website", "design", "event-promo"];
+export const REQUEST_TYPES = ["post", "website", "design", "event-promo", "other"];
 
 export const STAGES = [
   "submitted", // client created it

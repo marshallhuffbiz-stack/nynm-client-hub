@@ -79,7 +79,7 @@ var TEXT_FIELDS = {
 };
 
 // Mirror of core/model.mjs REQUEST_TYPES.
-var REQUEST_TYPES = ["post", "website", "design", "event-promo"];
+var REQUEST_TYPES = ["post", "website", "design", "event-promo", "other"];
 
 // Mirror of core/model.mjs STAGES (documentation / reference).
 var STAGES = [

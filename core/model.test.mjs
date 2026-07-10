@@ -18,7 +18,7 @@ import {
 import { genId, genToken } from "./ids.mjs";
 
 test("REQUEST_TYPES + STAGES are defined", () => {
-  assert.deepEqual(REQUEST_TYPES, ["post", "website", "design", "event-promo"]);
+  assert.deepEqual(REQUEST_TYPES, ["post", "website", "design", "event-promo", "other"]);
   assert.ok(STAGES.includes("submitted"));
   assert.ok(STAGES.includes("done"));
 });
@@ -35,6 +35,18 @@ test("validateRequestInput accepts a good post request and derives a title", () 
   assert.ok(r.value.title.length > 0);
   assert.equal(r.value.clientId, "the-o");
   assert.equal(r.value.eventId, "");
+});
+
+test("validateRequestInput accepts an 'other' catch-all request (portal Other tab)", () => {
+  const r = validateRequestInput({
+    clientId: "driven-creations",
+    type: "other",
+    description: "Make sure every post tags Driven Creations Custom and our logo is on there",
+    attachments: [],
+  });
+  assert.equal(r.ok, true);
+  assert.equal(r.value.type, "other");
+  assert.ok(r.value.title.length > 0);
 });
 
 test("validateRequestInput rejects bad type + empty description", () => {
