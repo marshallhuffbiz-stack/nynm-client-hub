@@ -222,3 +222,37 @@ test("runOnce FAIL-SOFT: a throwing truck-post lane never breaks the tick (drain
   assert.ok(drained, "the drain still ran");
   assert.equal(res.dailyPostCreated, 0);
 });
+
+// ---- runTruckPosts: cancellation lane ----
+
+test("runTruckPosts cancel lane: queues a portal cancellation post immediately, even before the daily gate", async () => {
+  // Portal flow: book a truck, mark it cancelled, submit the announcement request
+  // with the deterministic cancel crid — all as the CLIENT.
+  const add = await fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ c: TOKEN, action: "addBookings", bookings: [bk({ date: "2026-07-12" })] }) }).then((r) => r.json());
+  const bookingId = add.ids[0];
+  await fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ c: TOKEN, action: "updateBooking", id: bookingId, patch: { status: "cancelled" } }) });
+  const crid = `${CLIENT}-cancel-${bookingId}`;
+  const sub = await fetch(base, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ c: TOKEN, action: "submitRequest", clientRequestId: crid, request: { type: "post", title: "Canceled — Island Boys Food Truck (Sun · Jul 12)", description: "Island Boys Food Truck has canceled for Sun · Jul 12." } }) }).then((r) => r.json());
+  assert.equal(sub.ok, true);
+
+  // 06:00 ET on the 12th — BEFORE the 08:00 daily gate. Cancel lane must fire anyway.
+  const EARLY = new Date("2026-07-12T10:00:00Z");
+  const all = await fetchAll();
+  const res = await runTruckPosts({ cfg: cfgFor(base), all, now: EARLY });
+  assert.equal(res.cancelQueued, 1);
+  assert.equal(res.cancelFailed, 0);
+  assert.equal(res.dailyPostCreated, 0, "daily gate still closed at 06:00 ET");
+
+  // The request is now queued with the auto markers (autoApprove off by default).
+  const after = await fetchAll();
+  const r = after.requests.find((x) => x.meta && x.meta.clientRequestId === crid);
+  assert.equal(r.stage, "queued");
+  assert.equal(r.meta.autoEvent.kind, "cancellation");
+  assert.equal(r.meta.autoEvent.autoApprove, false);
+  assert.equal(r.meta.autoEvent.ymd, "2026-07-12");
+  assert.match(r.comment, /Island Boys Food Truck/);
+
+  // Idempotent: a second tick finds nothing submitted → queues nothing.
+  const res2 = await runTruckPosts({ cfg: cfgFor(base), all: after, now: EARLY });
+  assert.equal(res2.cancelQueued, 0);
+});

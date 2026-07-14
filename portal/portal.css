@@ -181,6 +181,10 @@
 .truck-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .truck-row + .truck-row { margin-top: 12px; padding-top: 12px; border-top: 0.5px solid var(--separator); }
 .truck-main { min-width: 0; flex: 1; }
+/* The truck itself is tappable (opens the action sheet: edit / rename / canceled / remove). */
+.truck-main[data-truck-actions] { cursor: pointer; border-radius: 10px; }
+.truck-main[data-truck-actions]:active { opacity: 0.7; }
+.truck-main[data-truck-actions]:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--blue-fill); }
 .truck-name { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; color: var(--label); margin-bottom: 3px; }
 .truck-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .truck-hours { color: var(--blue); font-weight: 500; font-size: 14px; font-variant-numeric: tabular-nums; }

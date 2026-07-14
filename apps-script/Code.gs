@@ -1151,6 +1151,21 @@ function handleUpsertVendor_(body, client) {
     for (k in v.value) { if (v.value.hasOwnProperty(k)) merged[k] = v.value[k]; }
     merged.updatedAt = now_();
     writeRow_(SHEET_VENDORS, existing.__row, merged);
+    // Rename (misspelling fix): bookings carry a denormalized vendorName snapshot
+    // taken at booking time — rewrite them so portal/Desk lists show the new name.
+    // (The live site already self-corrects: schedule-sync joins vendorId -> registry.)
+    if (existing.name !== v.value.name) {
+      var allBookings = readAll_(SHEET_BOOKINGS);
+      for (var bi = 0; bi < allBookings.length; bi++) {
+        var bk = allBookings[bi];
+        if (bk.vendorId === v.value.id && bk.clientId === v.value.clientId && bk.vendorName !== v.value.name) {
+          bk.vendorName = v.value.name;
+          bk.updatedAt = now_();
+          var row = bk.__row;
+          writeRow_(SHEET_BOOKINGS, row, stripRowMeta_(bk));
+        }
+      }
+    }
   } else {
     var rec = {
       id: v.value.id, clientId: v.value.clientId, name: v.value.name, category: v.value.category,

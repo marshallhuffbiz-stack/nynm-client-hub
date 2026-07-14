@@ -431,6 +431,26 @@ test("upsertVendor with explicit id updates in place; bad price 400; inactive hi
   assert.equal(h.get({ admin: ADMIN }).vendors.find((x) => x.id === id).active, false);
 });
 
+test("renaming a vendor (upsertVendor, same id) rewrites its bookings' vendorName snapshots", () => {
+  const h = createHarness();
+  const id = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Smokey Joes", category: "BBQ", price: "$$" } }).vendorId;
+  const otherId = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Churro Cart", category: "DESSERTS", price: "$" } }).vendorId;
+  h.post({ c: TOK_O, action: "addBookings", bookings: [
+    { vendorId: id, date: "2026-07-11" },
+    { vendorId: id, date: "2026-07-18" },
+    { vendorId: otherId, date: "2026-07-11" },
+  ] });
+  // Misspelling fix: same id, new name.
+  const u = h.post({ c: TOK_O, action: "upsertVendor", vendor: { id, name: "Smokey Joe's BBQ", category: "BBQ", price: "$$" } });
+  assert.equal(u.status, 200);
+  const bookings = h.get({ client: TOK_O }).bookings;
+  const renamed = bookings.filter((b) => b.vendorId === id);
+  assert.equal(renamed.length, 2);
+  for (const b of renamed) assert.equal(b.vendorName, "Smokey Joe's BBQ");
+  // Other vendors' bookings untouched.
+  assert.equal(bookings.find((b) => b.vendorId === otherId).vendorName, "Churro Cart");
+});
+
 test("addBookings batch-inserts with time defaults + vendorName snapshot; text-forced date/time round-trip", () => {
   const h = createHarness();
   const ven = h.post({ c: TOK_O, action: "upsertVendor", vendor: { name: "Taco Truck", category: "TACOS", price: "$$" } });

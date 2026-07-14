@@ -144,6 +144,22 @@ const bkRepeat = $("bk-repeat");
 const bkError = $("bk-error");
 const bkSave = $("bk-save");
 const bkCancel = $("bk-cancel");
+// Truck action sheet (tap a booked truck)
+const truckActionSheet = $("truck-action-sheet");
+const taTitle = $("ta-title");
+const taWhen = $("ta-when");
+const taEdit = $("ta-edit");
+const taRename = $("ta-rename");
+const taCancelled = $("ta-cancelled");
+const taRemove = $("ta-remove");
+const taClose = $("ta-close");
+// Rename-a-truck sheet
+const renameSheet = $("rename-sheet");
+const renameForm = $("rename-form");
+const rnName = $("rn-name");
+const rnError = $("rn-error");
+const rnSave = $("rn-save");
+const rnCancel = $("rn-cancel");
 
 const toastEl = $("toast");
 
@@ -236,6 +252,10 @@ let selectedDate = "";             // "YYYY-MM-DD" of the open day-detail (or ""
 //   mode "add"  -> { vendorId } : create a booking (repeat helper offered)
 //   mode "edit" -> { id }       : patch an existing booking's time/note
 let sheetCtx = null;
+// Booking id the truck action sheet is open for (or null).
+let actionCtx = null;
+// Vendor id the rename sheet is open for (or null).
+let renameCtx = null;
 
 /* ---------- view helpers ---------- */
 
@@ -542,6 +562,13 @@ function vendorsList() {
   const list = (currentData && Array.isArray(currentData.vendors)) ? currentData.vendors : [];
   return list.filter((v) => v && v.active !== false);
 }
+// Display name for a booking: the registry name wins over the booking's snapshot,
+// so a rename (misspelling fix) shows everywhere immediately.
+function vendorNameFor(b) {
+  if (!b) return "Truck";
+  const v = vendorsList().find((x) => x.id === b.vendorId);
+  return (v && v.name) || b.vendorName || "Truck";
+}
 // Bookings on a given date, name-sorted so the day reads consistently.
 function bookingsOn(dateISO) {
   return activeBookings()
@@ -643,8 +670,8 @@ function renderDayDetail() {
     const cat = b.vendorCategory || vendorCategoryFor(b.vendorId);
     return `
       <div class="truck-row" data-booking="${esc(b.id)}">
-        <div class="truck-main">
-          <div class="truck-name">${esc(b.vendorName || "Truck")}</div>
+        <div class="truck-main" data-truck-actions="${esc(b.id)}" role="button" tabindex="0" aria-label="Actions for ${esc(vendorNameFor(b))}">
+          <div class="truck-name">${esc(vendorNameFor(b))}</div>
           <div class="truck-meta">
             ${hours ? `<span class="truck-hours">${esc(hours)}</span>` : ""}
             ${cat ? `<span class="badge bone">${esc(cat)}</span>` : ""}
@@ -655,7 +682,7 @@ function renderDayDetail() {
           <button type="button" class="icon-btn" data-edit-booking="${esc(b.id)}" aria-label="Edit time or note">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 L4 16 L15 5 L19 9 L8 20 Z" /><path d="M13 7 L17 11" /></svg>
           </button>
-          <button type="button" class="icon-btn danger" data-remove-booking="${esc(b.id)}" aria-label="Remove ${esc(b.vendorName || "truck")}">
+          <button type="button" class="icon-btn danger" data-remove-booking="${esc(b.id)}" aria-label="Remove ${esc(vendorNameFor(b))}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
           </button>
         </div>
@@ -718,7 +745,7 @@ function openBookingSheet(ctx) {
   } else {
     const b = activeBookings().find((x) => x.id === ctx.id);
     if (!b) return;
-    bkSheetTitle.textContent = b.vendorName || "Truck";
+    bkSheetTitle.textContent = vendorNameFor(b);
     bkSheetWhen.textContent = formatDate(b.date);
     bkStart.value = b.startTime || "09:00";
     bkEnd.value = b.endTime || "17:00";
@@ -1122,7 +1149,7 @@ async function submitNewTruck(event) {
 
 async function removeBooking(id) {
   const b = activeBookings().find((x) => x.id === id);
-  const name = (b && b.vendorName) || "this truck";
+  const name = b ? vendorNameFor(b) : "this truck";
   if (!window.confirm(`Remove ${name} from ${formatDate(selectedDate)}?`)) return;
   // Optimistic: drop it now, restore on failure.
   removeLocalBooking(id);
@@ -1134,6 +1161,139 @@ async function removeBooking(id) {
   } catch (err) {
     toast("Couldn't remove that. Refreshing…");
     refresh();
+  }
+}
+
+/* ---------- food trucks: truck action sheet (tap a booked truck) ---------- */
+
+function openTruckActions(id) {
+  const b = activeBookings().find((x) => x.id === id);
+  if (!b) return;
+  actionCtx = id;
+  taTitle.textContent = vendorNameFor(b);
+  taWhen.textContent = formatDate(b.date);
+  truckActionSheet.classList.remove("hidden");
+}
+
+function closeTruckActions() {
+  truckActionSheet.classList.add("hidden");
+  actionCtx = null;
+}
+
+/* ---------- food trucks: rename a truck (misspelling fix) ---------- */
+
+function openRenameSheet(vendorId) {
+  const v = vendorsList().find((x) => x.id === vendorId);
+  if (!v) return;
+  renameCtx = vendorId;
+  rnError.classList.add("hidden");
+  rnError.textContent = "";
+  rnName.value = v.name || "";
+  renameSheet.classList.remove("hidden");
+  setTimeout(() => { rnName.focus(); rnName.select(); }, 60);
+}
+
+function closeRenameSheet() {
+  renameSheet.classList.add("hidden");
+  renameCtx = null;
+}
+
+async function submitRename(event) {
+  event.preventDefault();
+  if (busy || !renameCtx) return;
+  const v = vendorsList().find((x) => x.id === renameCtx);
+  const name = rnName.value.trim();
+  if (!v) { closeRenameSheet(); return; }
+  if (!name) { rnName.focus(); return; }
+  if (name === v.name) { closeRenameSheet(); return; }
+
+  setBusy(true, rnSave, "Saving…");
+  try {
+    // Same id + new name = rename in place (bookings keep pointing at this vendor).
+    const res = await api.upsertVendor({
+      id: v.id, name, category: v.category, price: v.price || "$$",
+      tagline: v.tagline || "", active: v.active !== false,
+    });
+    if (res && res.ok) {
+      // Optimistic: fix the registry AND every booking snapshot locally.
+      const data = currentData || {};
+      const vendors = (Array.isArray(data.vendors) ? data.vendors : []).map((x) =>
+        x && x.id === v.id ? { ...x, name } : x);
+      const bookings = (Array.isArray(data.bookings) ? data.bookings : []).map((b) =>
+        b && b.vendorId === v.id ? { ...b, vendorName: name } : b);
+      applyLocalTrucks({ vendors, bookings });
+      closeRenameSheet();
+      renderDayDetail();
+      toast("Fixed — the name is updated everywhere.");
+      refresh();
+    } else {
+      rnError.textContent = "That didn't save. Please try again.";
+      rnError.classList.remove("hidden");
+    }
+  } catch (err) {
+    rnError.textContent = "That didn't save. Please try again.";
+    rnError.classList.remove("hidden");
+  } finally {
+    setBusy(false, rnSave, "Save name");
+  }
+}
+
+/* ---------- food trucks: "they canceled" -> cancel booking + announcement post ---------- */
+
+async function announceCancellation(id) {
+  if (busy) return;
+  const b = activeBookings().find((x) => x.id === id);
+  if (!b) return;
+  const name = vendorNameFor(b);
+  const dateLabel = formatDate(b.date);
+  const ok = window.confirm(
+    `${name} canceled for ${dateLabel}?\n\nWe'll take them off that day and post a cancellation announcement on your social pages.`
+  );
+  if (!ok) return;
+
+  busy = true;
+  try {
+    // 1) Mark the booking cancelled (kept as history; the site drops it on the next sync).
+    const res = await api.updateBooking(id, { status: "cancelled" });
+    if (!res || !res.ok) {
+      toast("Couldn't update that. Please try again.");
+      return;
+    }
+    updateLocalBooking(id, { status: "cancelled" });
+    renderDayDetail();
+
+    // 2) Submit the announcement request. The deterministic clientRequestId marker
+    //    (<clientId>-cancel-<bookingId>) is what the worker's cancel lane keys on —
+    //    and it makes a double-tap dedupe server-side instead of double-posting.
+    const clientId = (currentData && currentData.client && currentData.client.clientId) || "";
+    const bizName = (currentData && currentData.client && currentData.client.name) || "our lot";
+    const others = bookingsOn(b.date).filter((x) => x.id !== id).map(vendorNameFor);
+    const hours = hoursLabel(b.startTime, b.endTime);
+    const title = `Canceled — ${name} (${dateLabel})`;
+    const description =
+      `${name} has canceled for ${dateLabel}${hours ? ` (was ${hours})` : ""} at ${bizName}. ` +
+      (others.length
+        ? `Still coming that day: ${others.join(", ")}. `
+        : `No other trucks are on the calendar for that day yet. `) +
+      `Post a cancellation announcement.`;
+    const sub = await api.submit({ type: "post", title, description, attachments: [] }, `${clientId}-cancel-${id}`);
+    if (sub && sub.ok) {
+      const nowIso = new Date().toISOString();
+      addLocalRequest({
+        id: sub.id, clientId, type: "post", title, description, attachments: [],
+        stage: "submitted", comment: "", scheduledFor: "", draft: null, changeNote: "",
+        createdAt: nowIso, updatedAt: nowIso, meta: {},
+      });
+      toast(`${name} is off ${dateLabel} — cancellation post is on the way.`);
+    } else {
+      toast("Truck removed, but the announcement didn't send. Tell us in Requests and we'll post it.");
+    }
+    refresh();
+  } catch (err) {
+    toast("Something went wrong — check your connection and try again.");
+    refresh();
+  } finally {
+    busy = false;
   }
 }
 
@@ -1573,12 +1733,38 @@ calGrid.addEventListener("click", (e) => {
 });
 
 // Day-detail: edit / remove a booking (delegated — cards re-render on refresh).
+// Tapping the truck itself opens the action sheet (edit / rename / canceled / remove).
 dayTrucks.addEventListener("click", (e) => {
   const edit = e.target.closest("[data-edit-booking]");
   if (edit) { openBookingSheet({ mode: "edit", id: edit.getAttribute("data-edit-booking") }); return; }
   const remove = e.target.closest("[data-remove-booking]");
-  if (remove) removeBooking(remove.getAttribute("data-remove-booking"));
+  if (remove) { removeBooking(remove.getAttribute("data-remove-booking")); return; }
+  const main = e.target.closest("[data-truck-actions]");
+  if (main) openTruckActions(main.getAttribute("data-truck-actions"));
 });
+dayTrucks.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  const main = e.target.closest("[data-truck-actions]");
+  if (main) { e.preventDefault(); openTruckActions(main.getAttribute("data-truck-actions")); }
+});
+
+// Truck action sheet.
+taEdit.addEventListener("click", () => { const id = actionCtx; closeTruckActions(); if (id) openBookingSheet({ mode: "edit", id }); });
+taRename.addEventListener("click", () => {
+  const id = actionCtx;
+  closeTruckActions();
+  const b = id && activeBookings().find((x) => x.id === id);
+  if (b) openRenameSheet(b.vendorId);
+});
+taCancelled.addEventListener("click", () => { const id = actionCtx; closeTruckActions(); if (id) announceCancellation(id); });
+taRemove.addEventListener("click", () => { const id = actionCtx; closeTruckActions(); if (id) removeBooking(id); });
+taClose.addEventListener("click", closeTruckActions);
+truckActionSheet.addEventListener("click", (e) => { if (e.target === truckActionSheet) closeTruckActions(); });
+
+// Rename sheet.
+renameForm.addEventListener("submit", submitRename);
+rnCancel.addEventListener("click", closeRenameSheet);
+renameSheet.addEventListener("click", (e) => { if (e.target === renameSheet) closeRenameSheet(); });
 
 // Add-a-truck search field.
 truckSearch.addEventListener("focus", () => { if (foodTrucksEnabled) renderResults(truckSearch.value); });
@@ -1615,7 +1801,10 @@ bookingForm.addEventListener("submit", submitBooking);
 bkCancel.addEventListener("click", closeBookingSheet);
 bookingSheet.addEventListener("click", (e) => { if (e.target === bookingSheet) closeBookingSheet(); });
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !bookingSheet.classList.contains("hidden")) closeBookingSheet();
+  if (e.key !== "Escape") return;
+  if (!bookingSheet.classList.contains("hidden")) closeBookingSheet();
+  if (!truckActionSheet.classList.contains("hidden")) closeTruckActions();
+  if (!renameSheet.classList.contains("hidden")) closeRenameSheet();
 });
 
 // Default selection + initial load.

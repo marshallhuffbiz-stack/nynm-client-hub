@@ -21,6 +21,7 @@ import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-appl
 import { buildSchedule, reconcile as reconcileSchedule, makeScheduleIO } from "./schedule-sync.mjs";
 import { runDailyPost } from "./daily-truck-post.mjs";
 import { runMonthly } from "./monthly-truck-post.mjs";
+import { runCancelPosts } from "./cancel-posts.mjs";
 import { todayInET, etOffset } from "./events-auto.mjs";
 import { onTickOutcome, repairCommand } from "./selfheal.mjs";
 
@@ -154,7 +155,7 @@ export async function runOnce({
   // (no second fetch). Dormant unless a site has schedule.enabled. Fail-soft belt-and-
   // suspenders (the runner is itself fail-soft per client): guard the call too so a broken
   // truck-post lane can NEVER break the drain/ship/site/schedule lanes.
-  let truckResult = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0 };
+  let truckResult = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0, cancelQueued: 0, cancelFailed: 0 };
   if (truckPosts) {
     try {
       truckResult = (await truckPosts({ all, now })) || truckResult;
@@ -191,6 +192,8 @@ export async function runOnce({
     monthlyQueued: truckResult.monthlyQueued || 0,
     monthlySkipped: truckResult.monthlySkipped || 0,
     monthlyFailed: truckResult.monthlyFailed || 0,
+    cancelQueued: truckResult.cancelQueued || 0,
+    cancelFailed: truckResult.cancelFailed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
     recovered,
@@ -296,7 +299,7 @@ export function atOrAfterEt(now, hhmm) {
 // (submitRequest forces the tenant from it). If a site has no token, that client is skipped
 // (logged) rather than throwing.
 export async function runTruckPosts({ cfg = {}, all = {}, now = new Date(), log = console.error }) {
-  const summary = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0 };
+  const summary = { dailyPostCreated: 0, dailyPostQueued: 0, dailyPostSkipped: 0, dailyPostFailed: 0, monthlyCreated: 0, monthlyQueued: 0, monthlySkipped: 0, monthlyFailed: 0, cancelQueued: 0, cancelFailed: 0 };
   const sites = (cfg && cfg.sites) || {};
   const clients = all.clients || [];
 
@@ -317,6 +320,18 @@ export async function runTruckPosts({ cfg = {}, all = {}, now = new Date(), log 
 
     const submitRequest = (request, token) => apiSubmit(cfg.execUrl, token, request, request && request.clientRequestId);
     const updateRequest = (id, patch) => apiUpdate(cfg.execUrl, cfg.adminToken, id, patch);
+
+    // Cancellation lane — NOT time-gated (a canceled truck should be announced on the
+    // first tick after the client taps "they canceled" in the portal). runCancelPosts
+    // is fail-soft per request; belt-and-suspenders here too.
+    try {
+      const cres = await runCancelPosts({ all, updateRequest, now, config: sched, clientId, log });
+      summary.cancelQueued += (cres && cres.cancelQueued) || 0;
+      summary.cancelFailed += (cres && cres.cancelFailed) || 0;
+    } catch (e) {
+      summary.cancelFailed += 1;
+      log(new Date().toISOString(), `truck-post[${clientId}] cancel: FAILED (caught, tick continues) — ${e && e.message ? e.message : String(e)}`);
+    }
 
     // Daily lane — gated on the ET time-of-day.
     if (atOrAfterEt(now, dailyTime)) {
