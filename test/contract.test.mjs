@@ -489,6 +489,24 @@ test("addBookings rejects the whole batch if any booking is invalid (unknown ven
   assert.equal(cv.body.bookings.filter((b) => b.vendorId === vendorId).length, 0);
 });
 
+test("renaming a vendor rewrites its bookings' vendorName snapshots (mock parity)", async () => {
+  const id = (await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Smokey Joes", category: "BBQ", price: "$$" } })).body.vendorId;
+  const otherId = (await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Side Cart", category: "DESSERTS", price: "$" } })).body.vendorId;
+  await post({ c: "tok-o", action: "addBookings", bookings: [
+    { vendorId: id, date: "2026-07-11" },
+    { vendorId: id, date: "2026-07-18" },
+    { vendorId: otherId, date: "2026-07-11" },
+  ] });
+  const upd = await post({ c: "tok-o", action: "upsertVendor", vendor: { id, name: "Smokey Joe's BBQ", category: "BBQ", price: "$$" } });
+  assert.equal(upd.status, 200);
+  // Mock store is shared across tests — scope assertions to this test's vendors.
+  const bookings = (await get("?c=tok-o")).body.bookings;
+  const renamed = bookings.filter((b) => b.vendorId === id);
+  assert.equal(renamed.length, 2);
+  for (const b of renamed) assert.equal(b.vendorName, "Smokey Joe's BBQ");
+  assert.equal(bookings.find((b) => b.vendorId === otherId).vendorName, "Side Cart");
+});
+
 test("addBookings groups a repeat-weekly series under a shared seriesId", async () => {
   const ven = await post({ c: "tok-o", action: "upsertVendor", vendor: { name: "Weekly Truck", category: "TACOS", price: "$" } });
   const vendorId = ven.body.vendorId;

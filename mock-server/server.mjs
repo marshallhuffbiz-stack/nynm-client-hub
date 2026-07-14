@@ -310,7 +310,18 @@ export function createApp({ storePath, uploadsDir }) {
               if (!v.ok) return { code: 400, obj: { ok: false, errors: v.errors } };
               const i = data.vendors.findIndex((x) => x.id === v.value.id && x.clientId === v.value.clientId);
               if (i >= 0) {
+                const prevName = data.vendors[i].name;
                 data.vendors[i] = { ...data.vendors[i], ...v.value, updatedAt: now() };
+                // Rename: rewrite the denormalized vendorName snapshot on this vendor's
+                // bookings so lists show the corrected name (mirrors handleUpsertVendor_).
+                if (prevName !== v.value.name) {
+                  for (const b of data.bookings) {
+                    if (b.vendorId === v.value.id && b.clientId === v.value.clientId && b.vendorName !== v.value.name) {
+                      b.vendorName = v.value.name;
+                      b.updatedAt = now();
+                    }
+                  }
+                }
               } else {
                 data.vendors.push({ ...v.value, createdAt: now(), updatedAt: now() });
               }
