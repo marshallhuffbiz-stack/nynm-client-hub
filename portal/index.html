@@ -306,6 +306,40 @@
     </form>
   </div>
 
+  <!-- Truck action sheet — tap a booked truck to pick an action. -->
+  <div id="truck-action-sheet" class="sheet-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="ta-title">
+    <div class="sheet">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <h2 id="ta-title">Truck</h2>
+      <p class="muted small" id="ta-when"></p>
+      <div style="display:flex; flex-direction:column; gap:8px; margin-top:14px">
+        <button type="button" class="btn block" id="ta-edit">Edit time or note</button>
+        <button type="button" class="btn block" id="ta-rename">Fix the truck's name</button>
+        <button type="button" class="btn danger block" id="ta-cancelled">They canceled — announce it</button>
+        <button type="button" class="btn block" id="ta-remove">Remove from this day</button>
+        <button type="button" class="btn ghost block" id="ta-close">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rename-a-truck sheet (misspelling fixes; updates the calendar and the website). -->
+  <div id="rename-sheet" class="sheet-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="rn-title">
+    <form class="sheet" id="rename-form" autocomplete="off">
+      <div class="sheet-grip" aria-hidden="true"></div>
+      <h2 id="rn-title">Fix the name</h2>
+      <p class="muted small">Fixes it everywhere — your calendar and the website.</p>
+      <div style="margin-top:12px">
+        <label for="rn-name">Truck name</label>
+        <input id="rn-name" type="text" required maxlength="80" />
+      </div>
+      <p id="rn-error" class="small hidden" style="color:var(--red);margin-top:8px"></p>
+      <div class="row wrap-row" style="gap:8px; margin-top:16px">
+        <button type="submit" class="btn primary" id="rn-save">Save name</button>
+        <button type="button" class="btn" id="rn-cancel">Cancel</button>
+      </div>
+    </form>
+  </div>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script type="module" src="./app.js"></script>
