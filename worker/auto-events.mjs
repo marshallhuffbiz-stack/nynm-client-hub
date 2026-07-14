@@ -6,11 +6,14 @@
 // Everything here is dependency-injected (extract, syncSite, apiUpdate, notifier) so the
 // orchestration is unit-tested without a model, git, or network.
 import { mightHaveDate, isConfident, buildSiteEvent, dayOfPostIso, eventKey } from "./events-auto.mjs";
+import { isCancellationRequest } from "./cancel-posts.mjs";
 
 const AUTO_TYPES = new Set(["post", "event-promo", "design"]);
 
 // Fresh requests for the auto client that plausibly name a date and haven't been
-// auto-checked yet (no meta.autoEvent).
+// auto-checked yet (no meta.autoEvent). Cancellation posts are EXCLUDED — they name a
+// date ("canceled for Jul 14") but must never become a website event or day-of lineup
+// post; the cancel-posts lane owns them.
 export function autoEventCandidates(requests, clientId) {
   return (requests || []).filter(
     (r) =>
@@ -19,6 +22,7 @@ export function autoEventCandidates(requests, clientId) {
       r.stage === "submitted" &&
       AUTO_TYPES.has(r.type) &&
       !(r.meta && r.meta.autoEvent) &&
+      !isCancellationRequest(r) &&
       mightHaveDate(`${r.title || ""}. ${r.description || ""}`)
   );
 }
