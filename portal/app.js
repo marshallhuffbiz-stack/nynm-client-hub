@@ -679,11 +679,8 @@ function renderDayDetail() {
           ${b.note ? `<div class="truck-note">${esc(b.note)}</div>` : ""}
         </div>
         <div class="truck-actions">
-          <button type="button" class="icon-btn" data-edit-booking="${esc(b.id)}" aria-label="Edit time or note">
+          <button type="button" class="icon-btn" data-truck-actions="${esc(b.id)}" aria-label="Options for ${esc(vendorNameFor(b))}">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20 L4 16 L15 5 L19 9 L8 20 Z" /><path d="M13 7 L17 11" /></svg>
-          </button>
-          <button type="button" class="icon-btn danger" data-remove-booking="${esc(b.id)}" aria-label="Remove ${esc(vendorNameFor(b))}">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6 L18 18 M18 6 L6 18" /></svg>
           </button>
         </div>
       </div>`;
@@ -1732,13 +1729,10 @@ calGrid.addEventListener("click", (e) => {
   if (cell) openDay(cell.getAttribute("data-date"));
 });
 
-// Day-detail: edit / remove a booking (delegated — cards re-render on refresh).
-// Tapping the truck itself opens the action sheet (edit / rename / canceled / remove).
+// Day-detail: everything lives under the pencil — it (and tapping the truck row)
+// opens the action sheet (edit / rename / canceled / remove). Delegated because
+// cards re-render on refresh.
 dayTrucks.addEventListener("click", (e) => {
-  const edit = e.target.closest("[data-edit-booking]");
-  if (edit) { openBookingSheet({ mode: "edit", id: edit.getAttribute("data-edit-booking") }); return; }
-  const remove = e.target.closest("[data-remove-booking]");
-  if (remove) { removeBooking(remove.getAttribute("data-remove-booking")); return; }
   const main = e.target.closest("[data-truck-actions]");
   if (main) openTruckActions(main.getAttribute("data-truck-actions"));
 });
