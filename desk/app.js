@@ -1338,7 +1338,7 @@ function monthGrid() {
     if (trucks.length) {
       const tags = el("div", { class: "cal-trucks" });
       for (const b of trucks.slice(0, 3)) {
-        tags.append(el("div", { class: "cal-truck", title: `${b.vendorName} · ${compactHours(b.startTime, b.endTime)}` }, b.vendorName));
+        tags.append(el("div", { class: "cal-truck", title: `${vendorNameFor(b)} · ${compactHours(b.startTime, b.endTime)}` }, vendorNameFor(b)));
       }
       if (trucks.length > 3) tags.append(el("div", { class: "cal-more" }, `+${trucks.length - 3} more`));
       cell.append(tags);
@@ -1396,7 +1396,7 @@ function truckRow(b) {
   const editing = state._editingBooking === b.id;
 
   const info = el("div", { class: "truck-info" },
-    el("div", { class: "truck-name" }, b.vendorName || b.vendorId),
+    el("div", { class: "truck-name" }, vendorNameFor(b)),
     el("div", { class: "truck-sub" },
       compactHours(b.startTime, b.endTime),
       cat ? el("span", { class: "truck-cat" }, cat) : false,
@@ -1410,9 +1410,30 @@ function truckRow(b) {
     renderTrucks();
   });
 
+  const renameBtn = el("button", { type: "button", class: "btn ghost sm" }, "Rename");
+  renameBtn.addEventListener("click", async () => {
+    const v = state.vendors.find((x) => x.id === b.vendorId && x.clientId === b.clientId);
+    if (!v) { toast("That truck isn't in the registry."); return; }
+    const name = window.prompt("Fix the truck's name (updates the calendar and the website):", v.name || "");
+    if (name == null) return;
+    const trimmed = name.trim();
+    if (!trimmed || trimmed === v.name) return;
+    // Same id + new name = rename in place; the backend rewrites booking snapshots.
+    const res = await call(() => truckApi.upsertVendor(b.clientId, {
+      id: v.id, name: trimmed, category: v.category, price: v.price || "$$",
+      tagline: v.tagline || "", active: v.active !== false,
+    }));
+    if (res) {
+      v.name = trimmed;
+      for (const x of state.bookings) if (x.vendorId === v.id && x.clientId === b.clientId) x.vendorName = trimmed;
+      toast("Name fixed everywhere.");
+      renderTrucks();
+    }
+  });
+
   const cancelBtn = el("button", { type: "button", class: "btn danger sm" }, "Cancel");
   cancelBtn.addEventListener("click", async () => {
-    if (!window.confirm(`Remove ${b.vendorName || "this truck"} from ${b.date}? This can't be undone.`)) return;
+    if (!window.confirm(`Remove ${vendorNameFor(b)} from ${b.date}? This can't be undone.`)) return;
     const res = await call(() => api.deleteBooking({ id: b.id }));
     if (res) {
       state.bookings = state.bookings.filter((x) => x.id !== b.id);
@@ -1422,7 +1443,7 @@ function truckRow(b) {
     }
   });
 
-  row.append(el("div", { class: "truck-row-main" }, info, el("div", { class: "truck-row-actions" }, editBtn, cancelBtn)));
+  row.append(el("div", { class: "truck-row-main" }, info, el("div", { class: "truck-row-actions" }, editBtn, renameBtn, cancelBtn)));
 
   if (editing) row.append(editTruckForm(b));
   return row;
@@ -1477,6 +1498,12 @@ function vendorsFor(clientId) {
 function vendorCategory(vendorId) {
   const v = state.vendors.find((x) => x.id === vendorId);
   return v ? v.category : "";
+}
+// Display name for a booking: the registry name wins over the booking's snapshot,
+// so a rename (misspelling fix) shows immediately (mirrors the portal).
+function vendorNameFor(b) {
+  const v = state.vendors.find((x) => x.id === b.vendorId && x.clientId === b.clientId);
+  return (v && v.name) || b.vendorName || b.vendorId;
 }
 
 // Add-a-truck: autocomplete over the client's registry (a <datalist>), default
