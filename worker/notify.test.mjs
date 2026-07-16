@@ -18,6 +18,12 @@ test("urgent pushes (publish failed / worker paused) get high priority + a warni
   assert.equal(h.Tags, "warning");
 });
 
+test("an explicit priority/tags (the loud new-request push) overrides the urgent default", () => {
+  const h = ntfyHeaders("New client request", { priority: "max", tags: "bell" });
+  assert.equal(h.Priority, "max");
+  assert.equal(h.Tags, "bell");
+});
+
 test("the Desk deep-link carries no admin key; click + extra headers are overridable", () => {
   assert.ok(!DESK_URL.includes("?"), "no query string (no ?k= token) in the push channel");
   const h = ntfyHeaders("t", { click: "https://example.com/desk/", extra: { Authorization: "Bearer x" } });
@@ -42,6 +48,22 @@ test("pushNotify wires Click/Priority into the ntfy request (and honors config.p
   assert.equal(calls[0].init.body, "boom");
   assert.equal(calls[1].init.headers.Click, "https://me.example/desk/");
   assert.equal(calls[1].init.headers.Priority, undefined);
+});
+
+test("notifyNew pushes at max priority with a bell so a new submission makes sound on iOS", async () => {
+  const calls = [];
+  const origFetch = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => { calls.push({ url, opts }); return { ok: true }; };
+  try {
+    const { makeNotifier } = await import("./notify.mjs");
+    const n = makeNotifier({ push: { mode: "ntfy", url: "https://ntfy.sh/t" } });
+    await n.notifyNew({ clientId: "the-o", title: "New flyer" });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].opts.headers.Title, "New client request");
+    assert.equal(calls[0].opts.headers.Priority, "max");
+    assert.equal(calls[0].opts.headers.Tags, "bell");
+    assert.match(String(calls[0].opts.body), /the-o: New flyer/);
+  } finally { globalThis.fetch = origFetch; }
 });
 
 test("notifyReady pushes a review prompt with client + title", async () => {

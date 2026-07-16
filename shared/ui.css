@@ -449,6 +449,18 @@ textarea { min-height: 96px; resize: vertical; line-height: 1.4; }
   -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
 }
 .lightbox-close:active { transform: scale(0.94); }
+/* Download button — only shown when the lightbox is opened with a download URL. */
+.lightbox-dl {
+  position: absolute; left: 50%; bottom: calc(22px + var(--safe-b)); transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 44px; padding: 11px 22px; border-radius: var(--r-pill);
+  background: rgba(255, 255, 255, 0.18); color: #fff; font-size: 15px; font-weight: 600;
+  letter-spacing: -0.2px; text-decoration: none;
+  border: 0.5px solid rgba(255, 255, 255, 0.2);
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px);
+}
+.lightbox-dl[hidden] { display: none; }
+.lightbox-dl:active { transform: translateX(-50%) scale(0.96); }
 /* any image wired as a lightbox trigger gets the zoom affordance */
 .zoomable { cursor: zoom-in; }
 

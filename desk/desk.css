@@ -74,7 +74,24 @@
 .req-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 5px; }
 .req-title { font-weight: 600; font-size: 17px; letter-spacing: -0.3px; margin: 14px 0 4px; }
 .req-desc { color: var(--label); font-size: 16px; letter-spacing: -0.2px; white-space: pre-wrap; word-break: break-word; line-height: 1.4; }
-.req-thumbs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+/* Attachments: one row each — [preview] [name] [Save]. */
+.req-thumbs { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.att { display: flex; align-items: center; gap: 12px; }
+.att .thumb { flex: none; }
+.thumb-doc { color: var(--label-2); }
+.thumb-doc svg { width: 26px; height: 26px; }
+.att-meta { flex: 1 1 auto; min-width: 0; }
+.att-name { font-size: 14px; font-weight: 500; color: var(--label); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-sub { font-size: 12px; color: var(--label-3); margin-top: 1px; }
+.att-dl {
+  flex: none; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 36px; padding: 8px 14px; border-radius: var(--r-pill);
+  background: var(--blue-fill); color: var(--blue); font-weight: 600; font-size: 14px;
+  text-decoration: none; white-space: nowrap;
+}
+.att-dl:active { transform: scale(0.96); }
+.att-dl-ico { display: inline-flex; }
+.att-dl-ico svg { width: 16px; height: 16px; }
 
 /* per-request delete control — quiet by default, destructive red on hover/focus */
 .req-del {

@@ -21,6 +21,18 @@ const CHEVRON_SVG =
   'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
   '<path d="M6 9l6 6 6-6"/></svg>';
 
+// Download glyph (down-arrow into a tray) for the attachment "Save" controls.
+const DOWNLOAD_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M12 3v11"/><path d="M8 11l4 4 4-4"/><path d="M5 20h14"/></svg>';
+
+// Document glyph for non-image attachments (PDFs, etc.) that have no thumbnail.
+const DOC_SVG =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" ' +
+  'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' +
+  '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>';
+
 // localStorage, but never throw (private mode / blocked storage).
 function safeLocalStorage() {
   try { return window.localStorage; } catch { return null; }
@@ -558,14 +570,15 @@ function filteredRequests() {
     .filter((r) => (state.filterClient === "all" ? true : r.clientId === state.filterClient))
     .slice()
     .sort((a, b) => {
-      // Needs-you first, then Claude's in-flight work, done last. Within the
-      // needs-you tier oldest first so nothing rots; elsewhere newest first.
+      // Needs-you first, then Claude's in-flight work, done last. Newest first
+      // within every tier so a fresh submission lands at the very top (it enters
+      // as "submitted", a needs-you stage) instead of sinking under older ones.
       const ta = stageTier(a.stage);
       const tb = stageTier(b.stage);
       if (ta !== tb) return ta - tb;
       const ca = Date.parse(a.createdAt || 0) || 0;
       const cb = Date.parse(b.createdAt || 0) || 0;
-      return ta === 0 ? ca - cb : cb - ca;
+      return cb - ca;
     });
 }
 
@@ -680,20 +693,45 @@ function requestCard(r) {
   const body = el("div", { class: "req-body", id: bodyId });
 
   if (!isDone) {
-    // attachments
+    // Attachments — one row each: [preview] [name] [Save]. Tapping an image
+    // opens it full-size in the lightbox; the Save button on every attachment
+    // pulls the ORIGINAL file straight from Drive, so nothing has to be
+    // screenshotted. Non-image files (e.g. PDFs) show a document tile instead.
     const atts = Array.isArray(r.attachments) ? r.attachments.filter((a) => a && a.url) : [];
     if (atts.length) {
       body.append(
         el("div", { class: "req-thumbs" },
           ...atts.map((a) => {
-            if ((a.mime || "").startsWith("audio/")) {
+            const mime = a.mime || "";
+            if (mime.startsWith("audio/")) {
               return el("audio", { class: "att-audio", controls: "controls", preload: "none", src: a.url });
             }
-            const full = driveEmbed(a.url, "w2000");
-            const link = el("a", { class: "thumb zoomable", href: full, target: "_blank", rel: "noopener", title: a.name || "" },
-              el("img", { src: driveEmbed(a.url, "w1200"), alt: a.name || "attachment", loading: "lazy" }));
-            link.addEventListener("click", (e) => { e.preventDefault(); openLightbox(full, a.name || "attachment"); });
-            return link;
+            const name = a.name || "attachment";
+            const dl = driveDownload(a.url);
+            const isImage = !mime || mime.startsWith("image/");
+
+            const saveBtn = el("a", {
+              class: "att-dl", href: dl, target: "_blank", rel: "noopener",
+              download: name, title: `Download ${name}`, "aria-label": `Download ${name}`,
+            }, el("span", { class: "att-dl-ico", html: DOWNLOAD_SVG }), "Save");
+
+            let preview;
+            if (isImage) {
+              const full = driveEmbed(a.url, "w2000");
+              preview = el("a", { class: "thumb zoomable", href: full, target: "_blank", rel: "noopener", title: name },
+                el("img", { src: driveEmbed(a.url, "w1200"), alt: name, loading: "lazy" }));
+              preview.addEventListener("click", (e) => { e.preventDefault(); openLightbox(full, name, { download: dl, name }); });
+            } else {
+              preview = el("span", { class: "thumb thumb-doc", "aria-hidden": "true", html: DOC_SVG });
+            }
+
+            return el("div", { class: "att" },
+              preview,
+              el("div", { class: "att-meta" },
+                el("div", { class: "att-name" }, name),
+                el("div", { class: "att-sub" }, isImage ? "Tap to enlarge" : (/pdf/i.test(mime) ? "PDF" : "Document"))),
+              saveBtn
+            );
           })
         )
       );
@@ -993,6 +1031,19 @@ function driveEmbed(url, size = "w1200") {
     const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
     const id = m && (m[1] || m[2]);
     if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=${size}`;
+  }
+  return url;
+}
+
+// The stored attachment URL is a Drive *thumbnail* (a resized render). For a
+// real download we want the ORIGINAL file, so rewrite it to Drive's direct
+// export endpoint. Non-Drive URLs (local mock, direct links) pass through.
+function driveDownload(url) {
+  if (!url) return url;
+  if (/drive\.google\.com/.test(url)) {
+    const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
+    const id = m && (m[1] || m[2]);
+    if (id) return `https://drive.google.com/uc?export=download&id=${id}`;
   }
   return url;
 }

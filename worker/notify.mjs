@@ -19,14 +19,20 @@ export function macNotify(title, message) {
 export const DESK_URL = "https://marshallhuffbiz-stack.github.io/nynm-client-hub/desk/";
 
 // Pure: the ntfy header set for one push. Every push deep-links to the Desk via
-// Click (tapping the notification opens the queue instead of the ntfy app);
-// urgent failures additionally get Priority high + a warning tag so they cut
-// through. Config-level push.headers always win last.
-export function ntfyHeaders(title, { click = DESK_URL, urgent = false, extra } = {}) {
+// Click (tapping the notification opens the queue instead of the ntfy app).
+// `urgent` is a shortcut for the failure styling (Priority high + a warning tag).
+// An explicit `priority`/`tags` wins over that shortcut — e.g. a new client
+// request pushes at max priority with a bell so it actually makes sound and cuts
+// through silent mode / Focus on iOS (default priority arrives silently).
+// Config-level push.headers always win last.
+export function ntfyHeaders(title, { click = DESK_URL, urgent = false, priority, tags, extra } = {}) {
+  const pri = priority || (urgent ? "high" : undefined);
+  const tag = tags || (urgent ? "warning" : undefined);
   return {
     Title: title,
     Click: click,
-    ...(urgent ? { Priority: "high", Tags: "warning" } : {}),
+    ...(pri ? { Priority: pri } : {}),
+    ...(tag ? { Tags: tag } : {}),
     ...(extra || {}),
   };
 }
@@ -36,6 +42,8 @@ export function ntfyHeaders(title, { click = DESK_URL, urgent = false, extra } =
 //   { mode: "json", url: "https://…", headers?: {} }         // POST {title,message,click,urgent}
 //   { mode: "off" } or absent                                 // no-op
 // opts.urgent marks error/failure pushes (high priority + warning tag on ntfy).
+// opts.priority / opts.tags force a specific ntfy priority/tag (e.g. new-request
+// pushes go max priority so they make sound on iOS).
 export async function pushNotify(push, title, message, opts = {}) {
   if (!push || !push.url || push.mode === "off") return false;
   const click = push.click || DESK_URL;
@@ -44,14 +52,14 @@ export async function pushNotify(push, title, message, opts = {}) {
     if (push.mode === "ntfy") {
       await fetch(push.url, {
         method: "POST",
-        headers: ntfyHeaders(title, { click, urgent, extra: push.headers }),
+        headers: ntfyHeaders(title, { click, urgent, priority: opts.priority, tags: opts.tags, extra: push.headers }),
         body: message,
       });
     } else {
       await fetch(push.url, {
         method: "POST",
         headers: { "content-type": "application/json", ...(push.headers || {}) },
-        body: JSON.stringify({ title, message, click, urgent }),
+        body: JSON.stringify({ title, message, click, urgent, priority: opts.priority || null }),
       });
     }
     return true;
@@ -67,7 +75,10 @@ export function makeNotifier(config = {}) {
       const title = "New client request";
       const msg = `${req.clientId}: ${req.title || req.type}`;
       await macNotify(title, msg);
-      await pushNotify(push, title, msg);
+      // Max priority + a bell so a fresh client submission actually makes sound
+      // and cuts through silent mode / Focus on iOS. (Default priority — the old
+      // behavior — arrives silently and gets missed.)
+      await pushNotify(push, title, msg, { priority: "max", tags: "bell" });
     },
     async notifyReady(req) {
       const title = "Draft ready for your review";

@@ -24,7 +24,16 @@ function ensure() {
   close.textContent = "✕"; // ✕
   close.addEventListener("click", closeLightbox);
 
-  overlay.append(imgEl, close);
+  // Optional Download button, shown only when openLightbox() is given a download
+  // URL. Lets the full-size view save the original file instead of screenshotting.
+  const dl = document.createElement("a");
+  dl.className = "lightbox-dl";
+  dl.target = "_blank";
+  dl.rel = "noopener";
+  dl.hidden = true;
+  dl.textContent = "Download";
+
+  overlay.append(imgEl, close, dl);
   // Tap the dimmed backdrop (but not the image) to close.
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeLightbox(); });
   document.addEventListener("keydown", (e) => {
@@ -33,11 +42,24 @@ function ensure() {
   document.body.append(overlay);
 }
 
-export function openLightbox(src, alt = "") {
+// opts.download (URL) shows a Download button; opts.name sets the saved filename.
+export function openLightbox(src, alt = "", opts = {}) {
   if (!src) return;
   ensure();
   imgEl.src = src;
   imgEl.alt = alt || "Full image";
+  const dl = overlay.querySelector(".lightbox-dl");
+  if (dl) {
+    const href = opts.download || opts.href;
+    if (href) {
+      dl.href = href;
+      if (opts.name) dl.setAttribute("download", opts.name); else dl.removeAttribute("download");
+      dl.hidden = false;
+    } else {
+      dl.hidden = true;
+      dl.removeAttribute("href");
+    }
+  }
   lastFocus = document.activeElement;
   overlay.classList.add("show");
   const close = overlay.querySelector(".lightbox-close");
