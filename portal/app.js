@@ -6,6 +6,7 @@ import { computeIdeas, buildCampaign } from "../shared/ideas.js";
 import { resolveAccess, persistAccess, PORTAL_TOKEN_KEY, PORTAL_PIN_KEY } from "../shared/token.js";
 import { installLaunchManifest } from "../shared/pwa.js";
 import { dataCacheKey, readDataCache, writeDataCache } from "../shared/datacache.js";
+import { computeWhatsNew, badgeCount } from "../shared/whatsnew.mjs";
 
 /* ---------- token + api ---------- */
 
@@ -110,6 +111,12 @@ const requestsList = $("requests-list");
 const eventsList = $("events-list");
 const ideasSection = $("ideas-section");
 const ideasList = $("ideas-list");
+const whatsnewSection = $("whatsnew-section");
+const whatsnewList = $("whatsnew-list");
+const schedField = $("sched-field");
+const schedChips = $("sched-chips");
+const schedTimeWrap = $("sched-time-wrap");
+const schedTime = $("sched-time");
 
 // --- Food Trucks surface ---
 const surfaceChips = $("surface-chips");
@@ -192,9 +199,9 @@ const STAGE_LABELS = {
   queued: "In progress",
   drafting: "In progress",
   changes: "In progress",
-  ready: "Ready",
-  approved: "Ready",
-  shipping: "Ready",
+  ready: "For your review",
+  approved: "Approved",
+  shipping: "On its way",
   done: "Posted",
   // A failed run is NYNM's problem to fix, not the client's — never show a
   // scary/stale state; the Desk surfaces it red on Marshall's side.
@@ -241,6 +248,20 @@ let currentData = null;
 let lastRenderSig = "";
 // When we last heard fresh data from the server (drives revalidate-on-return).
 let lastLoadedAt = 0;
+// Publish-time choice on the new-request form: "asap" | "pick".
+let schedMode = "asap";
+// What's-new: the lastSeen watermark captured ONCE at boot. The whole session
+// compares against this snapshot (so the feed doesn't vanish mid-visit), while
+// storage is stamped forward on every render so the NEXT open starts clean.
+const WHATSNEW_KEY = token ? `relay.whatsnew.${token.slice(0, 12)}` : "";
+const sessionSeenAt = (() => {
+  const ls = safeLocalStorage();
+  try { return (ls && WHATSNEW_KEY && ls.getItem(WHATSNEW_KEY)) || ""; } catch { return ""; }
+})();
+function stampWhatsNewSeen() {
+  const ls = safeLocalStorage();
+  try { if (ls && WHATSNEW_KEY) ls.setItem(WHATSNEW_KEY, new Date().toISOString()); } catch { /* non-fatal */ }
+}
 
 /* ---------- Food Trucks state ---------- */
 let foodTrucksEnabled = false;      // gated by client.features.foodTrucks
@@ -375,6 +396,91 @@ function threadHtml(req) {
     </div>`;
 }
 
+/* ---------- draft preview + review + receipts ---------- */
+
+// Drive "view" URLs aren't embeddable in <img>; convert to the thumbnail endpoint
+// (mirrors the Desk's helper). Non-Drive URLs pass through untouched.
+function driveEmbed(url, size = "w1200") {
+  if (!url) return url;
+  if (/drive\.google\.com/.test(url)) {
+    const m = String(url).match(/\/d\/([a-zA-Z0-9_-]+)|[?&]id=([a-zA-Z0-9_-]+)/);
+    const id = m && (m[1] || m[2]);
+    if (id) return `https://drive.google.com/thumbnail?id=${id}&sz=${size}`;
+  }
+  return url;
+}
+
+// "facebook","instagram" -> "Facebook + Instagram" (FB first, mirrors the Desk).
+function fmtChannels(channels) {
+  const order = { facebook: 0, instagram: 1 };
+  const names = { facebook: "Facebook", instagram: "Instagram" };
+  return (channels || [])
+    .slice()
+    .sort((a, b) => (order[a] ?? 9) - (order[b] ?? 9))
+    .map((c) => names[c] || (c ? c[0].toUpperCase() + c.slice(1) : c))
+    .join(" + ");
+}
+
+// ISO -> "Jul 17, 6:04 PM" for receipts and schedule lines.
+function fmtWhenFull(iso) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return "";
+  return new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// Stages where the staged draft is worth showing to the client.
+const DRAFT_VISIBLE_STAGES = new Set(["ready", "approved", "shipping", "done"]);
+
+// The staged draft, shown once it exists: at `ready` it's a review card with
+// Approve / Ask-for-a-change actions; after that it's the record of what ran.
+function draftPreviewHtml(req) {
+  const d = req && req.draft;
+  if (!d || !DRAFT_VISIBLE_STAGES.has(req.stage)) return "";
+  const img = d.imageUrl
+    ? `<img class="draft-img zoomable" src="${esc(driveEmbed(d.imageUrl))}" alt="Draft preview" loading="lazy" onerror="this.style.display='none'" />`
+    : "";
+  const caption = d.caption ? `<div class="draft-caption">${esc(d.caption)}</div>` : "";
+  const sched = fmtWhenFull(d.scheduledFor || req.scheduledFor);
+  const schedRow = (req.stage !== "done" && sched) ? `<div class="muted small">Scheduled for ${esc(sched)}</div>` : "";
+  const isReview = req.stage === "ready";
+  const head = isReview ? "Your draft is ready — take a look" : "What we made";
+  const actions = isReview ? `
+      <div class="review-actions">
+        <button type="button" class="btn primary" data-review-approve="${esc(req.id)}">Love it — post it</button>
+        <button type="button" class="btn" data-review-change="${esc(req.id)}">Ask for a change</button>
+      </div>
+      <div class="review-note-wrap hidden" data-note-wrap="${esc(req.id)}">
+        <textarea class="review-note" data-note-id="${esc(req.id)}" rows="2" placeholder="What should we change?"></textarea>
+        <button type="button" class="btn sm primary" data-review-send="${esc(req.id)}">Send changes</button>
+      </div>` : "";
+  return `
+    <div class="draft-preview${isReview ? " review" : ""}">
+      <div class="draft-head">${esc(head)}</div>
+      ${img}${caption}${schedRow}${actions}
+    </div>`;
+}
+
+// "It's live" receipt on finished work, from the worker's meta.run writeback.
+function receiptHtml(req) {
+  if (!req || req.stage !== "done") return "";
+  const run = (req.meta && req.meta.run) || {};
+  const when = run.finishedAt ? fmtWhenFull(run.finishedAt) : "";
+  if (run.liveUrl) {
+    return `<div class="receipt">
+        <span class="receipt-check" aria-hidden="true">✓</span>
+        <span>Live on your website${when ? ` · ${esc(when)}` : ""} · <a href="${esc(run.liveUrl)}" target="_blank" rel="noopener">See it live</a></span>
+      </div>`;
+  }
+  const where = fmtChannels(Array.isArray(run.channels) ? run.channels : []);
+  if (!where) return "";
+  const partial = run.status === "shipped-partial" && Array.isArray(run.failures) && run.failures.length
+    ? `<div class="muted small">One channel hiccuped — we're on it.</div>` : "";
+  return `<div class="receipt">
+      <span class="receipt-check" aria-hidden="true">✓</span>
+      <span>Published to ${esc(where)}${when ? ` · ${esc(when)}` : ""}</span>
+    </div>${partial}`;
+}
+
 function sortByCreatedDesc(a, b) {
   return String(b && b.createdAt || "").localeCompare(String(a && a.createdAt || ""));
 }
@@ -405,20 +511,41 @@ function snapshotThreadDrafts() {
     const id = ta.getAttribute("data-msg-id");
     if (id && ta.value) drafts[id] = ta.value;
   });
+  // Half-typed change-request notes (and whether their box is open) survive too.
+  const notes = {};
+  requestsList.querySelectorAll(".review-note").forEach((ta) => {
+    const id = ta.getAttribute("data-note-id");
+    const wrap = ta.closest(".review-note-wrap");
+    const open = !!(wrap && !wrap.classList.contains("hidden"));
+    if (id && (ta.value || open)) notes[id] = { value: ta.value, open };
+  });
   const active = document.activeElement;
-  const focused = (active && active.classList && active.classList.contains("thread-input"))
-    ? { id: active.getAttribute("data-msg-id"), start: active.selectionStart, end: active.selectionEnd }
+  const focused = (active && active.classList && (active.classList.contains("thread-input") || active.classList.contains("review-note")))
+    ? {
+        id: active.getAttribute("data-msg-id") || active.getAttribute("data-note-id"),
+        note: active.classList.contains("review-note"),
+        start: active.selectionStart,
+        end: active.selectionEnd,
+      }
     : null;
-  return { drafts, focused };
+  return { drafts, notes, focused };
 }
 
-function restoreThreadDrafts({ drafts, focused }) {
+function restoreThreadDrafts({ drafts, notes, focused }) {
   for (const [id, value] of Object.entries(drafts)) {
     const ta = requestsList.querySelector(`[data-msg-id="${CSS.escape(id)}"]`);
     if (ta) ta.value = value;
   }
+  for (const [id, n] of Object.entries(notes || {})) {
+    const ta = requestsList.querySelector(`[data-note-id="${CSS.escape(id)}"]`);
+    if (!ta) continue;
+    ta.value = n.value || "";
+    const wrap = ta.closest(".review-note-wrap");
+    if (wrap && n.open) wrap.classList.remove("hidden");
+  }
   if (focused && focused.id) {
-    const ta = requestsList.querySelector(`[data-msg-id="${CSS.escape(focused.id)}"]`);
+    const sel = focused.note ? `[data-note-id="${CSS.escape(focused.id)}"]` : `[data-msg-id="${CSS.escape(focused.id)}"]`;
+    const ta = requestsList.querySelector(sel);
     if (ta) {
       ta.focus();
       try { ta.setSelectionRange(focused.start, focused.end); } catch { /* non-fatal */ }
@@ -448,7 +575,7 @@ function renderRequests(requests) {
     const descRow = desc ? `<div class="req-desc">${desc}</div>` : "";
 
     return `
-      <div class="card">
+      <div class="card" data-req-card="${esc(req.id)}">
         <div class="req">
           <div class="req-main">
             <div class="req-title">${title}</div>
@@ -460,6 +587,8 @@ function renderRequests(requests) {
           </div>
           ${stageBadge(req && req.stage, req && req.type)}
         </div>
+        ${draftPreviewHtml(req)}
+        ${receiptHtml(req)}
         ${threadHtml(req)}
       </div>`;
   }).join("");
@@ -520,6 +649,45 @@ function renderIdeas(data) {
         ${idea.campaign ? `<button type="button" class="btn sm" data-idea="${i}" data-act="campaign">Build the campaign</button>` : ""}
       </div>
     </div>`).join("");
+}
+
+/* ---------- rendering: what's new ---------- */
+
+function whatsNewLine(item) {
+  const title = item.title ? `“${item.title}”` : "your request";
+  if (item.kind === "ready") return { text: `Your draft for ${title} is ready — take a look and approve it.`, cta: "Review it" };
+  if (item.kind === "reply") return { text: `NYNM replied on ${title}: ${item.text || ""}`, cta: "Open" };
+  if (item.kind === "deployed") return { text: `${title} is live on your website.`, cta: "View" };
+  return { text: `${title} was published to ${fmtChannels(item.channels)}.`, cta: "View" };
+}
+
+function renderWhatsNew(data) {
+  if (!whatsnewSection || !whatsnewList) return;
+  const items = computeWhatsNew(data, sessionSeenAt);
+  if (!items.length) {
+    whatsnewSection.classList.add("hidden");
+    whatsnewList.innerHTML = "";
+  } else {
+    whatsnewSection.classList.remove("hidden");
+    whatsnewList.innerHTML = items.map((item) => {
+      const line = whatsNewLine(item);
+      const icon = item.kind === "ready" ? "✎" : item.kind === "reply" ? "💬" : "✓";
+      return `
+      <button type="button" class="card wn-card${item.fresh ? " fresh" : ""}" data-wn-req="${esc(item.requestId)}">
+        <span class="wn-icon" aria-hidden="true">${icon}</span>
+        <span class="wn-text">${esc(line.text)}</span>
+        <span class="wn-cta">${esc(line.cta)}</span>
+      </button>`;
+    }).join("");
+  }
+  // App-icon badge (installed PWA, where supported): count of genuinely-new items;
+  // then stamp the watermark so the NEXT open starts from now.
+  try {
+    const n = badgeCount(items);
+    if (navigator.setAppBadge && n > 0) navigator.setAppBadge(n);
+    else if (navigator.clearAppBadge) navigator.clearAppBadge();
+  } catch { /* non-fatal */ }
+  stampWhatsNewSeen();
 }
 
 /* ================================================================
@@ -823,6 +991,33 @@ function selectType(type) {
     reqDescLabel.textContent = hint.label;
     reqDesc.placeholder = hint.placeholder;
   }
+
+  // "When should this go out?" only applies to social posts.
+  if (schedField) schedField.classList.toggle("hidden", type !== "post");
+}
+
+// Publish-time segmented control ("As soon as it's ready" | "Pick a time").
+function setSchedMode(mode) {
+  schedMode = mode === "pick" ? "pick" : "asap";
+  const btns = Array.from(schedChips.querySelectorAll(".seg-btn"));
+  let idx = 0;
+  btns.forEach((btn, i) => {
+    const active = btn.dataset.sched === schedMode;
+    btn.setAttribute("aria-selected", active ? "true" : "false");
+    if (active) idx = i;
+  });
+  const thumb = schedChips.querySelector(".seg-thumb");
+  if (thumb && btns.length) {
+    thumb.style.width = `calc((100% - 4px) / ${btns.length})`;
+    thumb.style.transform = `translateX(${idx * 100}%)`;
+  }
+  schedTimeWrap.classList.toggle("hidden", schedMode !== "pick");
+  if (schedMode === "pick" && !schedTime.value) {
+    // Prefill tomorrow at 9:00 AM local — a sensible default the client can tweak.
+    const d = new Date(Date.now() + 24 * 3600 * 1000);
+    const pad = (n) => String(n).padStart(2, "0");
+    schedTime.value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T09:00`;
+  }
 }
 
 /* ---------- form reset ---------- */
@@ -835,6 +1030,8 @@ function resetRequestForm() {
   uploadingCount = 0;
   uploadStatus.textContent = "";
   renderThumbs();
+  schedTime.value = "";
+  setSchedMode("asap");
 }
 
 function resetEventForm() {
@@ -918,6 +1115,14 @@ async function submitRequest(event) {
   }
   if (!description) description = "Please post this.";
 
+  // Client-chosen publish time (posts only). datetime-local yields YYYY-MM-DDTHH:MM.
+  const scheduledFor = (selectedType === "post" && schedMode === "pick" && schedTime.value) ? schedTime.value : "";
+  if (selectedType === "post" && schedMode === "pick" && !schedTime.value) {
+    toast("Pick a date and time, or switch back to “As soon as it's ready.”");
+    schedTime.focus();
+    return;
+  }
+
   setBusy(true, reqSubmit, "Sending…");
   try {
     if (!pendingSubmitId) pendingSubmitId = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : `c_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -926,6 +1131,7 @@ async function submitRequest(event) {
       title: "",
       description,
       attachments: pendingAttachments.slice(),
+      scheduledFor,
     }, pendingSubmitId);
     if (res && res.ok) {
       pendingSubmitId = null;
@@ -936,12 +1142,13 @@ async function submitRequest(event) {
         title: "",
         description,
         attachments: pendingAttachments.slice(),
+        scheduledFor,
         stage: "submitted",
         createdAt: new Date().toISOString(),
         meta: {},
       });
       resetRequestForm();
-      toast("Request sent. We'll take it from here.");
+      toast(scheduledFor ? `Request sent — aimed at ${fmtWhenFull(scheduledFor)}.` : "Request sent. We'll take it from here.");
       refresh(); // deliberately not awaited — the button unlocks right away
     } else {
       console.error("submit failed", res);
@@ -1330,6 +1537,7 @@ function applyData(data) {
 
   document.querySelector(".large-title")?.classList.remove("hidden");
   document.title = `${name} · Relay`;
+  renderWhatsNew(data);
   renderRequests(data && data.requests);
   renderEvents(data && data.events);
   renderIdeas(data);
@@ -1676,6 +1884,90 @@ requestsList.addEventListener("click", async (e) => {
     btn.disabled = false;
     btn.textContent = "Send";
   }
+});
+
+// Publish-time segmented control on the new-request form.
+schedChips.addEventListener("click", (e) => {
+  const btn = e.target.closest(".seg-btn");
+  if (btn && btn.dataset.sched) setSchedMode(btn.dataset.sched);
+});
+
+// Draft review: approve / open the change box / send changes. Delegated because
+// request cards re-render on refresh. Tap the draft image to zoom it.
+requestsList.addEventListener("click", async (e) => {
+  const img = e.target.closest(".draft-img");
+  if (img && img.src) { openLightbox(img.src.replace("sz=w1200", "sz=w2000"), "Draft preview"); return; }
+
+  const changeBtn = e.target.closest("[data-review-change]");
+  if (changeBtn) {
+    const wrap = requestsList.querySelector(`[data-note-wrap="${CSS.escape(changeBtn.getAttribute("data-review-change"))}"]`);
+    if (wrap) {
+      wrap.classList.toggle("hidden");
+      if (!wrap.classList.contains("hidden")) wrap.querySelector(".review-note")?.focus();
+    }
+    return;
+  }
+
+  const approveBtn = e.target.closest("[data-review-approve]");
+  if (approveBtn) {
+    const id = approveBtn.getAttribute("data-review-approve");
+    if (!window.confirm("Approve this draft? We'll post it to your pages automatically.")) return;
+    approveBtn.disabled = true;
+    approveBtn.textContent = "Approving…";
+    try {
+      const res = await api.review(id, "approve", "");
+      if (res && res.ok) {
+        toast("Approved — it's on its way to your pages.");
+        if (res.request) updateLocalRequest(res.request); else refresh();
+      } else {
+        toast(`That didn't go through.${res && res.error ? ` ${res.error}` : " Please try again."}`);
+        approveBtn.disabled = false;
+        approveBtn.textContent = "Love it — post it";
+      }
+    } catch {
+      toast("That didn't go through — check your connection and try again.");
+      approveBtn.disabled = false;
+      approveBtn.textContent = "Love it — post it";
+    }
+    return;
+  }
+
+  const sendBtn = e.target.closest("[data-review-send]");
+  if (sendBtn) {
+    const id = sendBtn.getAttribute("data-review-send");
+    const ta = requestsList.querySelector(`[data-note-id="${CSS.escape(id)}"]`);
+    const note = ta ? ta.value.trim() : "";
+    if (!note) { toast("Tell us what to change first."); if (ta) ta.focus(); return; }
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending…";
+    try {
+      const res = await api.review(id, "changes", note);
+      if (res && res.ok) {
+        if (ta) ta.value = "";
+        toast("Got it — we'll rework it and send a fresh draft.");
+        if (res.request) updateLocalRequest(res.request); else refresh();
+      } else {
+        toast(`That didn't send.${res && res.error ? ` ${res.error}` : " Please try again."}`);
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send changes";
+      }
+    } catch {
+      toast("That didn't send — check your connection and try again.");
+      sendBtn.disabled = false;
+      sendBtn.textContent = "Send changes";
+    }
+  }
+});
+
+// What's-new: tap an item to jump to (and briefly highlight) its request card.
+whatsnewList.addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-wn-req]");
+  if (!btn) return;
+  const card = requestsList.querySelector(`[data-req-card="${CSS.escape(btn.getAttribute("data-wn-req"))}"]`);
+  if (!card) return;
+  card.scrollIntoView({ behavior: "smooth", block: "center" });
+  card.classList.add("flash");
+  setTimeout(() => card.classList.remove("flash"), 1600);
 });
 
 // Proactive ideas: "Use this idea" pre-fills the request form; "Build the campaign" sends the 3-post pack.

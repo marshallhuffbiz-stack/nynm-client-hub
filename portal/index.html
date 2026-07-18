@@ -95,6 +95,12 @@
 
       <!-- ===================== REQUESTS surface ===================== -->
       <div id="surface-requests">
+      <!-- What's new since the last visit (replies, drafts to review, published work) -->
+      <div id="whatsnew-section" class="hidden">
+        <div class="section-label">What's new</div>
+        <div id="whatsnew-list"></div>
+      </div>
+
       <!-- New request -->
       <section class="card">
         <h2>New request</h2>
@@ -126,6 +132,22 @@
             <input id="req-camera" type="file" accept="image/*" capture="environment" class="visually-hidden" />
             <input id="req-files" type="file" accept="image/*" multiple class="visually-hidden" />
             <div id="thumbs" class="thumbs hidden"></div>
+          </div>
+          <!-- When should this go out? (posts only — hidden for other types) -->
+          <div id="sched-field" class="hidden">
+            <label>When should this go out?</label>
+            <div class="seg" id="sched-chips" role="tablist" aria-label="Publish time">
+              <span class="seg-thumb" aria-hidden="true"></span>
+              <button type="button" class="seg-btn" data-sched="asap" role="tab" aria-selected="true">As soon as it's ready</button>
+              <button type="button" class="seg-btn" data-sched="pick" role="tab" aria-selected="false">Pick a time</button>
+            </div>
+            <div class="field-icon hidden" id="sched-time-wrap" style="margin-top:10px">
+              <svg class="field-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <circle cx="12" cy="12" r="8.5" />
+                <path d="M12 7.4 V12 L15.2 14" />
+              </svg>
+              <input id="sched-time" type="datetime-local" aria-label="Publish date and time" />
+            </div>
           </div>
           <button id="req-submit" type="submit" class="btn primary block">Submit request</button>
         </form>

@@ -58,6 +58,8 @@ export const portalApi = (clientToken, pin = "") => ({
   addEvent: (event) => http("POST", "", { c: clientToken, action: "addEvent", event }),
   upload: (file) => http("POST", "", { c: clientToken, action: "uploadAttachment", file }, { retries: 1 }),
   message: (id, text) => http("POST", "", { c: clientToken, action: "postMessage", id, text }),
+  // Client draft review: verdict "approve" | "changes" (+ a note for changes).
+  review: (id, verdict, note) => http("POST", "", { c: clientToken, action: "clientReviewRequest", id, verdict, note }),
   // Food Trucks: registry + schedule. addBookings is one round-trip (repeat-weekly is
   // atomic); deleteBooking takes { id } or { seriesId } to drop a whole series.
   upsertVendor: (vendor) => http("POST", "", { c: clientToken, action: "upsertVendor", vendor }),
