@@ -53,6 +53,10 @@ export function validateRequestInput(input) {
   if (!description) errors.push("description required");
   let attachments = input.attachments == null ? [] : input.attachments;
   if (!Array.isArray(attachments)) errors.push("attachments must be an array");
+  // Optional client-chosen publish time: "" (ASAP), a date, or a date+time. The
+  // worker's publish lane parses it as a local wall-clock base for publishTimes.
+  const scheduledFor = String(input.scheduledFor || "").trim();
+  if (scheduledFor && !isScheduledFor(scheduledFor)) errors.push("scheduledFor must be YYYY-MM-DD or YYYY-MM-DDTHH:MM");
   if (errors.length) return { ok: false, errors };
   const title = String(input.title || "").trim() || titleFromDescription(description);
   return {
@@ -69,8 +73,15 @@ export function validateRequestInput(input) {
         mime: String(a.mime || ""),
       })),
       eventId: String(input.eventId || ""),
+      scheduledFor,
     },
   };
+}
+
+// "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM" (24-hour), with a real calendar date.
+function isScheduledFor(s) {
+  const m = /^(\d{4}-\d{2}-\d{2})(T([01]\d|2[0-3]):[0-5]\d)?$/.exec(String(s));
+  return !!m && !Number.isNaN(Date.parse(m[1]));
 }
 
 function isIsoDate(s) {

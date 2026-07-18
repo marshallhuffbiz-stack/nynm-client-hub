@@ -517,6 +517,88 @@ test("addBookings groups a series; updateBooking + cancel; deleteBooking by id a
   assert.equal(h.get({ admin: ADMIN }).bookings.filter((b) => b.seriesId === "series-abc").length, 0);
 });
 
+/* ============================ scheduledFor on submit ============================ */
+
+test("submitRequest stores an optional scheduledFor (date or date+time); bad format 400", () => {
+  const h = createHarness();
+  const dated = h.post({ c: TOK_O, action: "submitRequest", request: { type: "post", description: "weekend special", scheduledFor: "2026-07-25" } });
+  assert.equal(dated.status, 200);
+  const timed = h.post({ c: TOK_O, action: "submitRequest", request: { type: "post", description: "friday night", scheduledFor: "2026-07-24T18:30" } });
+  assert.equal(timed.status, 200);
+  const asap = h.post({ c: TOK_O, action: "submitRequest", request: { type: "post", description: "no schedule" } });
+  assert.equal(asap.status, 200);
+  const av = h.get({ admin: ADMIN });
+  assert.equal(av.requests.find((r) => r.id === dated.id).scheduledFor, "2026-07-25");
+  assert.equal(av.requests.find((r) => r.id === timed.id).scheduledFor, "2026-07-24T18:30");
+  assert.equal(av.requests.find((r) => r.id === asap.id).scheduledFor, "");
+  const bad = h.post({ c: TOK_O, action: "submitRequest", request: { type: "post", description: "x", scheduledFor: "next tuesday" } });
+  assert.equal(bad.status, 400);
+  assert.ok(bad.errors.some((e) => /scheduledFor/.test(e)));
+});
+
+/* ============================ clientReviewRequest ============================ */
+
+// Walk a fresh request to `ready` with a staged draft; returns its id.
+function stageReadyRequest(h, tok = TOK_O) {
+  const id = h.post({ c: tok, action: "submitRequest", request: { type: "post", description: "client review test" } }).id;
+  for (const a of ["send", "start"]) h.post({ admin: ADMIN, action: "updateRequest", id, patch: { action: a } });
+  h.post({ admin: ADMIN, action: "updateRequest", id, patch: { action: "ready", draft: { caption: "draft caption", imageUrl: "https://x/img.png" } } });
+  return id;
+}
+
+test("clientReviewRequest approve: ready -> approved, review recorded, note lands in the thread", () => {
+  const h = createHarness();
+  const id = stageReadyRequest(h);
+  const r = h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "approve", note: "Love it!" });
+  assert.equal(r.status, 200);
+  assert.equal(r.request.stage, "approved");
+  assert.equal(r.request.meta.clientReview.verdict, "approve");
+  assert.ok(r.request.meta.clientReview.at);
+  assert.ok(r.request.meta.activity.some((a) => a.kind === "approve" && /client/.test(a.text)));
+  assert.equal(r.request.meta.thread.at(-1).from, "client");
+  assert.equal(r.request.meta.thread.at(-1).text, "Love it!");
+  // draft kept for the publish lane
+  assert.equal(r.request.draft.caption, "draft caption");
+});
+
+test("clientReviewRequest approve without a note: no thread entry, still approved", () => {
+  const h = createHarness();
+  const id = stageReadyRequest(h);
+  const r = h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "approve" });
+  assert.equal(r.status, 200);
+  assert.equal(r.request.stage, "approved");
+  assert.equal((r.request.meta.thread || []).length, 0);
+});
+
+test("clientReviewRequest changes: ready -> changes with the note as changeNote + thread entry", () => {
+  const h = createHarness();
+  const id = stageReadyRequest(h);
+  const r = h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "changes", note: "Make the photo brighter" });
+  assert.equal(r.status, 200);
+  assert.equal(r.request.stage, "changes");
+  assert.equal(r.request.changeNote, "Make the photo brighter");
+  assert.equal(r.request.meta.clientReview.verdict, "changes");
+  assert.ok(r.request.meta.activity.some((a) => a.kind === "requestChanges" && /client/.test(a.text)));
+  assert.equal(r.request.meta.thread.at(-1).text, "Make the photo brighter");
+});
+
+test("clientReviewRequest guards: changes needs a note; bad verdict 400; wrong stage 409; not owner 403; missing 404", () => {
+  const h = createHarness();
+  const id = stageReadyRequest(h);
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "changes", note: "  " }).status, 400);
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "meh" }).status, 400);
+  // another client's token may not review it
+  assert.equal(h.post({ c: TOK_E, pin: PIN_E, action: "clientReviewRequest", id, verdict: "approve" }).status, 403);
+  // no auth at all
+  assert.equal(h.post({ action: "clientReviewRequest", id, verdict: "approve" }).status, 403);
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id: "req_nope", verdict: "approve" }).status, 404);
+  // approve it, then a second review hits the wrong-stage guard
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "approve" }).status, 200);
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id, verdict: "approve" }).status, 409);
+  // seeded req_theo_1 sits at "submitted" — also 409
+  assert.equal(h.post({ c: TOK_O, action: "clientReviewRequest", id: "req_theo_1", verdict: "approve" }).status, 409);
+});
+
 /* ============================ harness self-check ============================ */
 
 test("harness is strict: an unstubbed GAS API fails loudly, never silently", () => {

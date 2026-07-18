@@ -142,7 +142,7 @@ export function createApp({ storePath, uploadsDir }) {
 
         if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].includes(action) && !adminOk)
           return send(res, 403, { ok: false, error: "admin required" });
-        if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].includes(action) && !client && !adminOk)
+        if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "clientReviewRequest", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].includes(action) && !client && !adminOk)
           return send(res, 403, { ok: false, error: "client link required" });
 
         const result = await store.tx(async (data) => {
@@ -172,7 +172,7 @@ export function createApp({ storePath, uploadsDir }) {
                 ...v.value,
                 stage: "submitted",
                 comment: "",
-                scheduledFor: "",
+                scheduledFor: v.value.scheduledFor || "",
                 draft: null,
                 changeNote: "",
                 createdAt: now(),
@@ -271,6 +271,38 @@ export function createApp({ storePath, uploadsDir }) {
               cur.meta = cur.meta || { activity: [] };
               cur.meta.thread = (cur.meta.thread || []).concat([{ at: now(), from: adminOk ? "team" : "client", text }]);
               data.requests[idx] = mergePatch(cur, {}, now());
+              return { code: 200, obj: { ok: true, request: data.requests[idx] } };
+            }
+            case "clientReviewRequest": {
+              // The client's own review of a staged draft: approve it into the
+              // publish lane, or send it back with a change note. Client may only
+              // review their own request; admin may act on any (mirrors postMessage).
+              const idx = data.requests.findIndex((r) => r.id === body.id);
+              if (idx < 0) return { code: 404, obj: { ok: false, error: "not found" } };
+              const cur = data.requests[idx];
+              if (!adminOk && (!client || cur.clientId !== client.clientId))
+                return { code: 403, obj: { ok: false, error: "not your request" } };
+              const verdict = String(body.verdict || "").trim();
+              if (verdict !== "approve" && verdict !== "changes")
+                return { code: 400, obj: { ok: false, error: "verdict must be approve or changes" } };
+              const note = String(body.note || "").trim();
+              if (verdict === "changes" && !note)
+                return { code: 400, obj: { ok: false, error: "tell us what to change" } };
+              if (cur.stage !== "ready")
+                return { code: 409, obj: { ok: false, error: `no draft awaiting review (stage: ${cur.stage})` } };
+              const at = now();
+              cur.meta = cur.meta || { activity: [] };
+              cur.meta.clientReview = { at, verdict, note };
+              cur.meta.activity = (cur.meta.activity || []).concat([
+                verdict === "approve"
+                  ? { at, kind: "approve", text: "approved by client" }
+                  : { at, kind: "requestChanges", text: "client requested changes" },
+              ]);
+              if (note) cur.meta.thread = (cur.meta.thread || []).concat([{ at, from: "client", text: note }]);
+              const patch = verdict === "approve"
+                ? { stage: nextStage(cur.stage, "approve") }
+                : { stage: nextStage(cur.stage, "requestChanges"), changeNote: note };
+              data.requests[idx] = mergePatch(cur, patch, at);
               return { code: 200, obj: { ok: true, request: data.requests[idx] } };
             }
             case "promoteEvent": {

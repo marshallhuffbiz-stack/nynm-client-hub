@@ -355,6 +355,10 @@ function validateRequestInput_(input) {
   if (!description) errors.push("description required");
   var attachments = (input.attachments == null) ? [] : input.attachments;
   if (!isArray_(attachments)) errors.push("attachments must be an array");
+  // Optional client-chosen publish time: "" (ASAP), a date, or a date+time. The
+  // worker's publish lane parses it as a local wall-clock base for publishTimes.
+  var scheduledFor = String(input.scheduledFor || "").trim();
+  if (scheduledFor && !isScheduledFor_(scheduledFor)) errors.push("scheduledFor must be YYYY-MM-DD or YYYY-MM-DDTHH:MM");
   if (errors.length) return { ok: false, errors: errors };
   var title = String(input.title || "").trim() || titleFromDescription_(description);
   return {
@@ -369,9 +373,16 @@ function validateRequestInput_(input) {
         a = a || {};
         return { name: String(a.name || ""), url: String(a.url || ""), mime: String(a.mime || "") };
       }),
-      eventId: String(input.eventId || "")
+      eventId: String(input.eventId || ""),
+      scheduledFor: scheduledFor
     }
   };
+}
+
+// mirror isScheduledFor() in core/model.mjs: "YYYY-MM-DD" or "YYYY-MM-DDTHH:MM".
+function isScheduledFor_(s) {
+  var m = /^(\d{4}-\d{2}-\d{2})(T([01]\d|2[0-3]):[0-5]\d)?$/.exec(String(s));
+  return !!m && !isNaN(Date.parse(m[1]));
 }
 
 function validateEventInput_(input) {
@@ -741,7 +752,7 @@ function doPost(e) {
     if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].indexOf(action) >= 0 && !adminOk) {
       return json_(403, { ok: false, error: "admin required" });
     }
-    if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
+    if (["submitRequest", "addEvent", "uploadAttachment", "postMessage", "clientReviewRequest", "upsertVendor", "addBookings", "updateBooking", "deleteBooking"].indexOf(action) >= 0 && !clientForAuth && !adminOk) {
       return json_(403, { ok: false, error: "client link required" });
     }
 
@@ -786,6 +797,9 @@ function doPost(e) {
           break;
         case "postMessage":
           result = handlePostMessage_(body, clientForAuth);
+          break;
+        case "clientReviewRequest":
+          result = handleClientReviewRequest_(body, clientForAuth);
           break;
         case "upsertVendor":
           result = handleUpsertVendor_(body, clientForAuth);
@@ -851,6 +865,52 @@ function handlePostMessage_(body, client) {
   return { code: 200, obj: { ok: true, request: stripRowMeta_(merged) } };
 }
 
+// The client's own review of a staged draft: approve it into the publish lane, or
+// send it back with a change note. Client may only review their own request; admin
+// may act on any (mirrors handlePostMessage_ + the mock's clientReviewRequest case).
+function handleClientReviewRequest_(body, client) {
+  var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
+  var requests = readAll_(SHEET_REQUESTS);
+  var rec = null;
+  for (var i = 0; i < requests.length; i++) {
+    if (requests[i].id === body.id) { rec = requests[i]; break; }
+  }
+  if (!rec) return { code: 404, obj: { ok: false, error: "not found" } };
+  if (!adminOk && (!client || rec.clientId !== client.clientId)) {
+    return { code: 403, obj: { ok: false, error: "not your request" } };
+  }
+  var verdict = String(body.verdict || "").trim();
+  if (verdict !== "approve" && verdict !== "changes") {
+    return { code: 400, obj: { ok: false, error: "verdict must be approve or changes" } };
+  }
+  var note = String(body.note || "").trim();
+  if (verdict === "changes" && !note) {
+    return { code: 400, obj: { ok: false, error: "tell us what to change" } };
+  }
+  if (rec.stage !== "ready") {
+    return { code: 409, obj: { ok: false, error: "no draft awaiting review (stage: " + rec.stage + ")" } };
+  }
+  var at = now_();
+  rec.meta = rec.meta || { activity: [] };
+  rec.meta.clientReview = { at: at, verdict: verdict, note: note };
+  var activity = (rec.meta.activity || []).slice();
+  activity.push(verdict === "approve"
+    ? { at: at, kind: "approve", text: "approved by client" }
+    : { at: at, kind: "requestChanges", text: "client requested changes" });
+  rec.meta.activity = activity;
+  if (note) {
+    var thread = (rec.meta.thread || []).slice();
+    thread.push({ at: at, from: "client", text: note });
+    rec.meta.thread = thread;
+  }
+  var patch = verdict === "approve"
+    ? { stage: nextStage_(rec.stage, "approve") }
+    : { stage: nextStage_(rec.stage, "requestChanges"), changeNote: note };
+  var merged = mergePatch_(rec, patch, at);
+  writeRow_(SHEET_REQUESTS, rec.__row, merged);
+  return { code: 200, obj: { ok: true, request: stripRowMeta_(merged) } };
+}
+
 function handleSubmitRequest_(body, client) {
   var adminOk = !!(body.admin && safeEquals_(body.admin, getAdminToken_()));
   var input = {};
@@ -882,7 +942,7 @@ function handleSubmitRequest_(body, client) {
     eventId: v.value.eventId,
     stage: "submitted",
     comment: "",
-    scheduledFor: "",
+    scheduledFor: v.value.scheduledFor || "",
     draft: null,
     changeNote: "",
     createdAt: now_(),

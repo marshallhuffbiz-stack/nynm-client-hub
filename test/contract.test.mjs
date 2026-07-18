@@ -569,3 +569,36 @@ test("deleteBooking by seriesId removes the whole series", async () => {
   assert.equal(av.body.bookings.filter((b) => b.seriesId === "wipe-me").length, 0);
   assert.equal(av.body.bookings.filter((b) => b.id === standalone.body.ids[0]).length, 1);
 });
+
+test("submitRequest stores an optional scheduledFor; bad format rejected (mock parity)", async () => {
+  const timed = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "friday night", scheduledFor: "2026-07-24T18:30" } });
+  assert.equal(timed.status, 200);
+  const av = await get("?admin=testadmin");
+  assert.equal(av.body.requests.find((r) => r.id === timed.body.id).scheduledFor, "2026-07-24T18:30");
+  const bad = await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "x", scheduledFor: "next tuesday" } });
+  assert.equal(bad.status, 400);
+});
+
+test("clientReviewRequest: approve and changes from ready; guards (mock parity)", async () => {
+  const id = (await post({ c: "tok-o", action: "submitRequest", request: { type: "post", description: "client review mock test" } })).body.id;
+  for (const a of ["send", "start"]) await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: a } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "ready", draft: { caption: "c" } } });
+  // changes path first
+  const ch = await post({ c: "tok-o", action: "clientReviewRequest", id, verdict: "changes", note: "brighter" });
+  assert.equal(ch.status, 200);
+  assert.equal(ch.body.request.stage, "changes");
+  assert.equal(ch.body.request.changeNote, "brighter");
+  assert.equal(ch.body.request.meta.thread.at(-1).text, "brighter");
+  // re-stage to ready, then approve
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "start" } });
+  await post({ admin: "testadmin", action: "updateRequest", id, patch: { action: "ready", draft: { caption: "c2" } } });
+  const ap = await post({ c: "tok-o", action: "clientReviewRequest", id, verdict: "approve" });
+  assert.equal(ap.status, 200);
+  assert.equal(ap.body.request.stage, "approved");
+  assert.equal(ap.body.request.meta.clientReview.verdict, "approve");
+  // guards
+  assert.equal((await post({ c: "tok-o", action: "clientReviewRequest", id, verdict: "approve" })).status, 409);
+  assert.equal((await post({ c: "tok-o", action: "clientReviewRequest", id, verdict: "meh" })).status, 400);
+  assert.equal((await post({ action: "clientReviewRequest", id, verdict: "approve" })).status, 403);
+  assert.equal((await post({ c: "tok-o", action: "clientReviewRequest", id: "req_nope", verdict: "approve" })).status, 404);
+});
