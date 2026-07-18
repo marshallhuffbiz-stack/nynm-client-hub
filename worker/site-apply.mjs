@@ -186,7 +186,15 @@ export function makeSiteShipper({ apiUpdate, notifier = {}, prepare, apply = app
       await apiUpdate(apiBase, adminToken, r.id, { action: "ship", _note: `deploying to ${prep.liveUrl}` });
       const res = await apply({ manifest: prep.manifest, git: prep.git, io: prep.io, live: prep.live });
       if (res.ok && res.verified) {
-        await apiUpdate(apiBase, adminToken, r.id, { action: "done", _note: `deployed + verified live: ${prep.liveUrl}` });
+        // Record the outcome in meta.run (preserving existing meta — the backend
+        // deep-merges, but carry it anyway like publish.mjs does) so the portal
+        // can show the client a "live on the site" receipt with the real URL.
+        const baseMeta = (r && r.meta) || {};
+        await apiUpdate(apiBase, adminToken, r.id, {
+          action: "done",
+          _note: `deployed + verified live: ${prep.liveUrl}`,
+          meta: { ...baseMeta, run: { ...(baseMeta.run || {}), status: "deployed", liveUrl: prep.liveUrl, finishedAt: new Date().toISOString(), error: "" } },
+        });
         deployed += 1;
         try { await notifier.notifyDeployed?.({ clientId: r.clientId, title: r.title, url: prep.liveUrl }); } catch { /* non-fatal */ }
       } else if (res.skipped) {

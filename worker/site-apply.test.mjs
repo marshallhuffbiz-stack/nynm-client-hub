@@ -205,3 +205,18 @@ test("makeSiteShipper: missing manifest (prepare error) → error, no ship attem
   assert.equal(patches[0].patch.stage, "error");
   assert.match(patches[0].patch.meta.run.error, /no manifest/);
 });
+
+test("makeSiteShipper: verified deploy records meta.run.liveUrl so the portal can show the live link", async () => {
+  const { patches, apiUpdate } = recorder();
+  const ship = makeSiteShipper({ apiUpdate, prepare: OK_PREP, apply: async () => ({ ok: true, changed: true, verified: true }) });
+  await ship({ apiBase: "b", adminToken: "A", ships: [{ id: "w1", meta: { thread: [{ at: "t", from: "client", text: "hi" }] } }] });
+  const done = patches.find((p) => p.patch.action === "done");
+  assert.ok(done, "done writeback present");
+  const run = done.patch.meta && done.patch.meta.run;
+  assert.ok(run, "meta.run present on done");
+  assert.equal(run.status, "deployed");
+  assert.equal(run.liveUrl, "https://eatson601.com");
+  assert.ok(run.finishedAt);
+  // existing meta preserved (thread survives the writeback merge)
+  assert.equal(done.patch.meta.thread[0].text, "hi");
+});

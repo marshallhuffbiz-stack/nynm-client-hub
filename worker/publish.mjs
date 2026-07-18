@@ -89,7 +89,9 @@ export async function shipRequest(req, { client, integrations, postiz, now, repo
 
   // Publish each channel independently: a failure on one channel must not discard
   // the channels that already succeeded (else a retry would double-post them).
-  const times = publishTimes(channels.length, { scheduledFor: draft.scheduledFor, now });
+  // The draft's explicit schedule wins; else honor the time the client picked at
+  // submit (request.scheduledFor) so "post this Friday at 6" lands Friday at 6.
+  const times = publishTimes(channels.length, { scheduledFor: draft.scheduledFor || req.scheduledFor, now });
   const postIds = [];
   const failures = [];
   for (let i = 0; i < channels.length; i++) {

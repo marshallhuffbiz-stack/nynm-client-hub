@@ -415,3 +415,29 @@ test("makeShipper: retries the done writeback once if it fails (no wedge, still 
   assert.equal(calls.filter((a) => a === "done").length, 2, "done retried once");
   assert.equal(res.shipped, 1); // the post DID publish, so it still counts shipped
 });
+
+// --- F4: request-level scheduledFor falls through when the draft has none ---
+
+test("shipRequest: draft without scheduledFor falls back to req.scheduledFor as the publish base", async () => {
+  const calls = [];
+  const postiz = {
+    upload: async () => ({ url: "https://postiz/img.png" }),
+    createPost: async (o) => { calls.push(o); return { postId: `p${calls.length}` }; },
+  };
+  const req = { ...REQ, scheduledFor: "2026-06-19T20:00:00Z", draft: { ...REQ.draft, scheduledFor: "" } };
+  const res = await shipRequest(req, { client: CLIENT, integrations: INTEGRATIONS, postiz, now: NOW });
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].isoTime, "2026-06-19T20:00:00.000Z"); // fb first, at the requested time
+});
+
+test("shipRequest: an explicit draft.scheduledFor still wins over req.scheduledFor", async () => {
+  const calls = [];
+  const postiz = {
+    upload: async () => ({ url: "https://postiz/img.png" }),
+    createPost: async (o) => { calls.push(o); return { postId: `p${calls.length}` }; },
+  };
+  const req = { ...REQ, scheduledFor: "2026-06-19T20:00:00Z", draft: { ...REQ.draft, scheduledFor: "2026-06-19T21:30:00Z" } };
+  const res = await shipRequest(req, { client: CLIENT, integrations: INTEGRATIONS, postiz, now: NOW });
+  assert.equal(res.ok, true);
+  assert.equal(calls[0].isoTime, "2026-06-19T21:30:00.000Z");
+});
