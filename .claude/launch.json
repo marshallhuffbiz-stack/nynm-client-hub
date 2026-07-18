@@ -1,6 +1,11 @@
 {
   "version": "0.0.1",
   "configurations": [
-    { "name": "client-hub-dev", "runtimeExecutable": "npm", "runtimeArgs": ["run", "dev"], "port": 8080 }
+    {
+      "name": "relay-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 8080
+    }
   ]
 }
