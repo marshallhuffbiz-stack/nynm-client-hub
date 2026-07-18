@@ -292,7 +292,8 @@ label {
   font-size: 13px; color: var(--label-2); font-weight: 400;
   display: block; margin-bottom: 6px; letter-spacing: -0.1px;
 }
-input[type="text"], input[type="date"], input[type="password"], input[type="number"],
+input[type="text"], input[type="date"], input[type="time"], input[type="datetime-local"],
+input[type="password"], input[type="number"],
 input[type="email"], input[type="tel"], textarea, select {
   width: 100%; font-family: var(--font); font-size: 17px; color: var(--label);
   background: var(--fill-input); border: none; border-radius: var(--r-input);

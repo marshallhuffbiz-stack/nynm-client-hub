@@ -425,7 +425,9 @@ function fmtChannels(channels) {
 function fmtWhenFull(iso) {
   const t = Date.parse(iso);
   if (Number.isNaN(t)) return "";
-  return new Date(t).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+  return new Date(t)
+    .toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    .replace(/ (AM|PM)$/i, " $1"); // keep "11:40 PM" on one line in receipts
 }
 
 // Stages where the staged draft is worth showing to the client.
@@ -440,13 +442,17 @@ function draftPreviewHtml(req) {
     ? `<img class="draft-img zoomable" src="${esc(driveEmbed(d.imageUrl))}" alt="Draft preview" loading="lazy" onerror="this.style.display='none'" />`
     : "";
   const caption = d.caption ? `<div class="draft-caption">${esc(d.caption)}</div>` : "";
+  const summary = (!d.caption && d.summary) ? `<div class="draft-caption">${esc(d.summary)}</div>` : "";
   const sched = fmtWhenFull(d.scheduledFor || req.scheduledFor);
   const schedRow = (req.stage !== "done" && sched) ? `<div class="muted small">Scheduled for ${esc(sched)}</div>` : "";
   const isReview = req.stage === "ready";
-  const head = isReview ? "Your draft is ready — take a look" : "What we made";
+  // Nothing visual to show (e.g. a website draft with no caption): skip the shell
+  // entirely unless the client needs the review actions.
+  if (!isReview && !img && !caption && !summary) return "";
+  const head = isReview ? "Your draft is ready. Take a look" : "What we made";
   const actions = isReview ? `
       <div class="review-actions">
-        <button type="button" class="btn primary" data-review-approve="${esc(req.id)}">Love it — post it</button>
+        <button type="button" class="btn primary" data-review-approve="${esc(req.id)}">Love it, post it</button>
         <button type="button" class="btn" data-review-change="${esc(req.id)}">Ask for a change</button>
       </div>
       <div class="review-note-wrap hidden" data-note-wrap="${esc(req.id)}">
@@ -456,7 +462,7 @@ function draftPreviewHtml(req) {
   return `
     <div class="draft-preview${isReview ? " review" : ""}">
       <div class="draft-head">${esc(head)}</div>
-      ${img}${caption}${schedRow}${actions}
+      ${img}${caption}${summary}${schedRow}${actions}
     </div>`;
 }
 
@@ -474,7 +480,7 @@ function receiptHtml(req) {
   const where = fmtChannels(Array.isArray(run.channels) ? run.channels : []);
   if (!where) return "";
   const partial = run.status === "shipped-partial" && Array.isArray(run.failures) && run.failures.length
-    ? `<div class="muted small">One channel hiccuped — we're on it.</div>` : "";
+    ? `<div class="muted small">One channel hiccuped. We're on it.</div>` : "";
   return `<div class="receipt">
       <span class="receipt-check" aria-hidden="true">✓</span>
       <span>Published to ${esc(where)}${when ? ` · ${esc(when)}` : ""}</span>
@@ -655,7 +661,7 @@ function renderIdeas(data) {
 
 function whatsNewLine(item) {
   const title = item.title ? `“${item.title}”` : "your request";
-  if (item.kind === "ready") return { text: `Your draft for ${title} is ready — take a look and approve it.`, cta: "Review it" };
+  if (item.kind === "ready") return { text: `Your draft for ${title} is ready. Take a look and approve it.`, cta: "Review it" };
   if (item.kind === "reply") return { text: `NYNM replied on ${title}: ${item.text || ""}`, cta: "Open" };
   if (item.kind === "deployed") return { text: `${title} is live on your website.`, cta: "View" };
   return { text: `${title} was published to ${fmtChannels(item.channels)}.`, cta: "View" };
@@ -1148,7 +1154,7 @@ async function submitRequest(event) {
         meta: {},
       });
       resetRequestForm();
-      toast(scheduledFor ? `Request sent — aimed at ${fmtWhenFull(scheduledFor)}.` : "Request sent. We'll take it from here.");
+      toast(scheduledFor ? `Request sent, aimed at ${fmtWhenFull(scheduledFor)}.` : "Request sent. We'll take it from here.");
       refresh(); // deliberately not awaited — the button unlocks right away
     } else {
       console.error("submit failed", res);
@@ -1917,17 +1923,17 @@ requestsList.addEventListener("click", async (e) => {
     try {
       const res = await api.review(id, "approve", "");
       if (res && res.ok) {
-        toast("Approved — it's on its way to your pages.");
+        toast("Approved! It's on its way to your pages.");
         if (res.request) updateLocalRequest(res.request); else refresh();
       } else {
         toast(`That didn't go through.${res && res.error ? ` ${res.error}` : " Please try again."}`);
         approveBtn.disabled = false;
-        approveBtn.textContent = "Love it — post it";
+        approveBtn.textContent = "Love it, post it";
       }
     } catch {
-      toast("That didn't go through — check your connection and try again.");
+      toast("That didn't go through. Check your connection and try again.");
       approveBtn.disabled = false;
-      approveBtn.textContent = "Love it — post it";
+      approveBtn.textContent = "Love it, post it";
     }
     return;
   }
@@ -1944,7 +1950,7 @@ requestsList.addEventListener("click", async (e) => {
       const res = await api.review(id, "changes", note);
       if (res && res.ok) {
         if (ta) ta.value = "";
-        toast("Got it — we'll rework it and send a fresh draft.");
+        toast("Got it. We'll rework it and send a fresh draft.");
         if (res.request) updateLocalRequest(res.request); else refresh();
       } else {
         toast(`That didn't send.${res && res.error ? ` ${res.error}` : " Please try again."}`);
@@ -2095,6 +2101,7 @@ document.addEventListener("keydown", (e) => {
 
 // Default selection + initial load.
 selectType("post");
+setSchedMode("asap"); // size the schedule seg's thumb before first paint
 
 if (!token) {
   // No ?c= token at all -> can't load anything.

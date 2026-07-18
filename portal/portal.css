@@ -258,7 +258,8 @@
 }
 .draft-preview.review .draft-head { color: var(--blue); }
 .draft-img {
-  width: 100%; max-height: 340px; object-fit: cover;
+  /* contain, never crop: the client is reviewing the whole creative */
+  width: 100%; max-height: 340px; object-fit: contain;
   border-radius: 10px; cursor: zoom-in; background: var(--card);
 }
 .draft-caption {
