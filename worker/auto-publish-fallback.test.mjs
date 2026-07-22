@@ -240,3 +240,48 @@ test("run: disabled → zero work, zero calls", async () => {
   assert.equal(h.updates.length, 0);
   assert.equal(h.pushes.length, 0);
 });
+
+// ---- integration: the real backend (mock-server mirrors Code.gs) accepts our patch shapes ----
+
+test("integration: fallback send + approve patches walk a request through the real state machine", async (t) => {
+  const { mkdtemp, writeFile: wf, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { createApp } = await import("../mock-server/server.mjs");
+  const { apiUpdate } = await import("./writeback.mjs");
+
+  const dir = await mkdtemp(join(tmpdir(), "ch-fallback-"));
+  await wf(
+    join(dir, "store.json"),
+    JSON.stringify({
+      settings: { adminToken: "A" },
+      clients: [{ clientId: "the-o", name: "The O", token: "t", active: true }],
+      requests: [
+        { id: "f1", clientId: "the-o", type: "post", title: "stale submitted", stage: "submitted", createdAt: iso(90), meta: { notified: true } },
+        { id: "f2", clientId: "the-o", type: "post", title: "stale ready", stage: "ready", createdAt: iso(90), draft: { caption: "hi", scheduledFor: "2026-07-23T13:00:00Z" }, meta: { notified: true } },
+      ],
+      events: [],
+    })
+  );
+  const srv = createApp({ storePath: join(dir, "store.json") });
+  await new Promise((r) => srv.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  t.after(async () => { await new Promise((r) => srv.close(r)); await rm(dir, { recursive: true, force: true }); });
+
+  const all = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const res = await runAutoPublishFallback({
+    apiBase: base, adminToken: "A", requests: all.requests, cfg: CFG,
+    apiUpdate, notify: async () => true, now: () => NOW,
+  });
+  assert.equal(res.sent, 1);
+  assert.equal(res.approved, 1);
+  assert.equal(res.failed, 0);
+
+  const after = await fetch(`${base}/?admin=A`).then((r) => r.json());
+  const byId = Object.fromEntries(after.requests.map((r) => [r.id, r]));
+  assert.equal(byId.f1.stage, "queued");
+  assert.equal(byId.f1.meta.autoPublishFallback.sentAt, NOW.toISOString());
+  assert.equal(byId.f2.stage, "approved");
+  assert.equal(byId.f2.draft.scheduledFor, undefined);
+  assert.equal(byId.f2.meta.autoPublishFallback.approvedAt, NOW.toISOString());
+});
