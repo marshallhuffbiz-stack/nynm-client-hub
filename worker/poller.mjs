@@ -15,6 +15,7 @@ import { apiFetchAll, apiUpdate, apiSubmit } from "./writeback.mjs";
 import { makeNotifier, macNotify, pushNotify } from "./notify.mjs";
 import { makeShipper, makePostizClient } from "./publish.mjs";
 import { makeAutoEvents } from "./auto-events.mjs";
+import { makeAutoPublishFallback } from "./auto-publish-fallback.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
 import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
@@ -41,6 +42,7 @@ export async function runOnce({
   scheduleSync,
   truckPosts,
   autoEvents,
+  staleFallback,
   notifier,
   digestHour = 8,
   getLastDigest,
@@ -77,6 +79,19 @@ export async function runOnce({
     autoApproveRes = (await autoEvents.autoApprove({ apiBase, adminToken, requests: reqs })) || autoApproveRes;
   }
   const autoQueued = new Set(autoRes.queuedIds || []);
+
+  // Auto-publish fallback: post requests nobody acted on within the hour get pushed
+  // forward automatically (submitted → drain, ready → approve → publish), with a
+  // T-15min warning push. Fail-soft: a broken fallback lane can NEVER break the
+  // drain/ship lanes — worst case is today's behavior (requests wait for Marshall).
+  let staleRes = { warned: 0, sent: 0, approved: 0, failed: 0 };
+  if (staleFallback) {
+    try {
+      staleRes = (await staleFallback({ apiBase, adminToken, requests: reqs })) || staleRes;
+    } catch (e) {
+      console.error(new Date().toISOString(), "auto-publish fallback lane error (caught, tick continues):", e && e.message ? e.message : String(e));
+    }
+  }
 
   for (const r of jobs.newSubmits) {
     if (autoQueued.has(r.id)) continue; // auto-event already handled this tick
@@ -196,6 +211,10 @@ export async function runOnce({
     cancelFailed: truckResult.cancelFailed || 0,
     autoQueued: autoRes.queued || 0,
     autoApproved: autoApproveRes.approved || 0,
+    staleWarned: staleRes.warned || 0,
+    staleSent: staleRes.sent || 0,
+    staleApproved: staleRes.approved || 0,
+    staleFailed: staleRes.failed || 0,
     recovered,
   };
 }
@@ -632,6 +651,15 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       truckPosts = ({ all, now }) => runTruckPosts({ cfg, all, now });
     }
 
+    // Auto-publish fallback lane — wired only when config.autoPublishFallback.enabled
+    // is true (dormant otherwise; makeAutoPublishFallback returns null when disabled).
+    const staleFallback = makeAutoPublishFallback({
+      cfg: cfg.autoPublishFallback,
+      apiUpdate,
+      push: cfg.push,
+      pushNotify,
+    });
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
@@ -642,6 +670,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       scheduleSync,
       truckPosts,
       autoEvents,
+      staleFallback,
       notifier,
       digestHour: cfg.digestHour ?? 8,
       getLastDigest,
