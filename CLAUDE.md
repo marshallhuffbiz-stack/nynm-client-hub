@@ -9,7 +9,7 @@ What this is: client request portal (`portal/`) + Marshall's Request Desk (`desk
 - **Access tokens ride the URL**: Desk uses `?k=`, Portal uses `?c=` (older links `?client=`). The PWA manifests deliberately **omit `start_url`/`scope`** so Add-to-Home-Screen keeps the token — do not add those keys back (iOS dead-ends clients if you do).
 - **The worker runs on the VPS** (systemd, 90s interval, user `relay`) since 2026-07-02. The Mac launchd worker is RETIRED — the plist in the repo is rollback material only. Brand assets sync Mac→VPS hourly.
 - Cache-bust live checks with `?cb=<timestamp>` — GH Pages and the service worker both cache hard (stale-while-revalidate; first paint comes from cache).
-- Nothing ships without Marshall's approval in the Desk; website/design fixes are staged, never auto-pushed.
+- Nothing ships without Marshall's approval in the Desk, EXCEPT the explicitly config-gated auto lanes: `autoApproveCancelPosts`, `autoApproveDaily`, client-review approve (portal), and the `autoPublishFallback` lane (2026-07-22: a post/event-promo request with no human action for 60 min auto-sends to the drain and auto-approves once staged — Marshall's standing order because he keeps missing notify pings). Website/design fixes are still staged, never auto-pushed.
 
 ## Verifying changes
 

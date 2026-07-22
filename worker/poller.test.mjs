@@ -369,3 +369,44 @@ test("runOnce routes an approved website request to the siteShipper, never the d
   const after = await fetch(`${base}/?admin=A`).then((r) => r.json());
   assert.equal(after.requests.find((r) => r.id === w.id).stage, "done");
 });
+
+test("runOnce: staleFallback lane runs, gets the tick's requests, and surfaces counters", async () => {
+  let seen = null;
+  const staleFallback = async ({ apiBase, adminToken, requests }) => {
+    seen = { apiBase, adminToken, count: requests.length };
+    return { warned: 1, sent: 2, approved: 3, failed: 0 };
+  };
+  const res = await runOnce({
+    apiBase: base,
+    adminToken: "A",
+    caps: { draft: 0, ship: 0 },
+    drainer: async () => ({ drafted: 0 }),
+    shipper: async () => ({ shipped: 0, failed: 0 }),
+    staleFallback,
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    now: new Date(),
+  });
+  assert.equal(seen.apiBase, base);
+  assert.equal(seen.adminToken, "A");
+  assert.ok(seen.count >= 1);
+  assert.equal(res.staleWarned, 1);
+  assert.equal(res.staleSent, 2);
+  assert.equal(res.staleApproved, 3);
+  assert.equal(res.staleFailed, 0);
+});
+
+test("runOnce: a throwing staleFallback lane is caught — the tick still completes", async () => {
+  const res = await runOnce({
+    apiBase: base,
+    adminToken: "A",
+    caps: { draft: 0, ship: 0 },
+    drainer: async () => ({ drafted: 0 }),
+    shipper: async () => ({ shipped: 0, failed: 0 }),
+    staleFallback: async () => { throw new Error("lane blew up"); },
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    now: new Date(),
+  });
+  assert.equal(res.staleWarned, 0);
+  assert.equal(res.staleSent, 0);
+  assert.equal(res.staleApproved, 0);
+});
