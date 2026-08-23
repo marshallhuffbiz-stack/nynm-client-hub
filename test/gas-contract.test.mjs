@@ -369,6 +369,11 @@ test("upsertClient mints a token; deactivating a client kills their portal link"
   assert.equal(off.status, 200);
   assert.equal(off.token, created.token); // token stable across upsert
   assert.equal(h.get({ client: created.token }).status, 403);
+  // [V10] ...and dead for WRITES too, not just reads. The POST path used to resolve the
+  // client with no `active` filter, so a revoked portal link kept full write access.
+  assert.equal(h.post({ c: created.token, action: "submitRequest", request: { type: "post", description: "still in?" } }).status, 403);
+  assert.equal(h.post({ c: created.token, action: "postMessage", id: "r1", text: "hello?" }).status, 403);
+  assert.equal(h.post({ c: created.token, action: "addBookings", bookings: [] }).status, 403);
   // missing clientId 400
   assert.equal(h.post({ admin: ADMIN, action: "upsertClient", client: {} }).status, 400);
 });

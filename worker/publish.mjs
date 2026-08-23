@@ -8,8 +8,10 @@
 import { resolve as resolvePath, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
+import { appendFileSync, mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { apiMessage as defaultApiMessage } from "./writeback.mjs";
+import { ensureHostCredit } from "./host-credit.mjs";
 import { noteFor } from "../shared/history.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -234,6 +236,23 @@ function runPostiz(args) {
     });
   });
 }
+// A host-credit repair is never silent. It means an upstream caption generator is still
+// emitting bare captions, so it is written to the worker log AND to the same audit log the
+// PreToolUse guard uses, giving one place to answer "is this still happening?".
+// Alerting contract: this line in worker/logs is the signal; the credit itself is already
+// guaranteed by the repair, so a missed alert degrades observability, never the client's post.
+const HOST_CREDIT_LOG = resolvePath(homedir(), ".claude/logs/eats-host-credit-guard.log");
+function logHostCreditRepair({ integrationId, platform, action }) {
+  const line = `${new Date().toISOString()} REPAIRED(worker) ${integrationId} platform=${platform} action=${action} host=${HOST}`;
+  console.warn(`[host-credit] repaired an Eats on 601 caption (${action}, ${platform}) - fix the upstream generator`);
+  try {
+    mkdirSync(dirname(HOST_CREDIT_LOG), { recursive: true });
+    appendFileSync(HOST_CREDIT_LOG, line + "\n");
+  } catch {
+    // Log failure must never block a post.
+  }
+}
+
 // Postiz CLI prints a human header line before its JSON; slice from the first bracket/brace.
 function parseJsonTail(out, open) {
   const i = out.indexOf(open);
@@ -244,8 +263,22 @@ function parseJsonTail(out, open) {
 // Build the `posts:create` argv. Flag order is irrelevant to the CLI, so -m is
 // appended LAST — the bug to avoid is inserting it between -c and its value,
 // which makes the CLI read "-m" as the caption.
-export function postsCreateArgs({ caption, mediaUrl, isoTime, integrationId, settings }) {
-  const args = ["posts:create", "-c", caption || "", "-s", isoTime, "-i", integrationId, "-t", "schedule", "--settings", JSON.stringify(settings || { post_type: "post" })];
+//
+// This is also the worker's HOST-CREDIT CHOKEPOINT. Every worker-originated post is built
+// here, and the worker shells out to the CLI from launchd/systemd, so Claude's PreToolUse
+// guard never sees it. Enforcing here is what makes the credit unskippable in this lane.
+// `onRepair` is invoked when a caption had to be fixed, so the repair is logged rather than
+// silent: a repair means an upstream caption generator is still emitting bare captions.
+export function postsCreateArgs({ caption, mediaUrl, isoTime, integrationId, settings, onRepair }) {
+  const credit = ensureHostCredit(caption || "", integrationId);
+  if (credit.changed && typeof onRepair === "function") {
+    try {
+      onRepair({ integrationId, platform: credit.platform, action: credit.action, before: caption || "", after: credit.caption });
+    } catch {
+      // A failing logger must never block the post.
+    }
+  }
+  const args = ["posts:create", "-c", credit.caption, "-s", isoTime, "-i", integrationId, "-t", "schedule", "--settings", JSON.stringify(settings || { post_type: "post" })];
   if (mediaUrl) args.push("-m", mediaUrl);
   return args;
 }
@@ -261,7 +294,7 @@ export function makePostizClient() {
       return { url: d.path || d.url };
     },
     async createPost(opts) {
-      const arr = parseJsonTail(await runPostiz(postsCreateArgs(opts)), "[");
+      const arr = parseJsonTail(await runPostiz(postsCreateArgs({ ...opts, onRepair: logHostCreditRepair })), "[");
       return { postId: arr[0] && arr[0].postId };
     },
   };

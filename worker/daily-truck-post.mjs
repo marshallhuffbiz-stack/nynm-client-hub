@@ -14,6 +14,7 @@
 // flow is unit-tested without a live backend.
 import { dayOfPostIso, todayInET } from "./events-auto.mjs";
 import { hoursDisplay } from "./schedule-sync.mjs";
+import { loadHostRule } from "./host-credit.mjs";
 
 // Re-export so existing importers of todayInET from this module keep working.
 export { todayInET };
@@ -44,14 +45,40 @@ function resolveVendor(b, byId) {
   };
 }
 
+// Resolve the day's bookings to display entries once, so the request text and the captions
+// can never drift apart.
+function lineupFor(dayBookings, vendors) {
+  const byId = new Map();
+  for (const v of vendors || []) if (v && v.id) byId.set(v.id, v);
+  return (dayBookings || []).map((b) => resolveVendor(b, byId));
+}
+
+// The Driven Creations Custom host credit, written in NATIVELY here at the generator.
+//
+// host-credit.mjs stays exactly where it is: it is the repair layer that catches ANY Eats
+// caption on its way to Postiz, including hand-written ones and every other lane. But its
+// own header says a repair means an upstream caption generator is still wrong, and this is
+// one of those generators. So the credit is built in at the source, reading the SAME rule
+// object host-credit.mjs reads, so the wording has exactly one definition. Facebook takes
+// the plain name (Postiz cannot publish a real Page tag, so an "@" renders as dead literal
+// text); Instagram takes the handle, which does publish as a tappable tag.
+export function creditLineFor(platform, rule = loadHostRule()) {
+  return platform === "instagram" ? rule.creditLineInstagram : rule.creditLine;
+}
+
+// The day-of caption for one platform. brand.json places the credit on its own line at the
+// end, before hashtags. This caption carries no hashtags, so the credit is the last line.
+export function buildDailyCaption(dayBookings, vendors, { platform = "facebook", rule = loadHostRule() } = {}) {
+  const lines = lineupFor(dayBookings, vendors).map((v) => (v.hours ? `${v.name} (${v.hours})` : v.name));
+  return `On the lot today: ${lines.join(", ")}.\nCome hungry.\n\n${creditLineFor(platform, rule)}`;
+}
+
 // Build the day-of post REQUEST fields (pure): the title + a description that lists today's
 // trucks + hours and asks the drain for a branded "on the lot today" lineup graphic, plus
 // the `comment` = the AUTO day-of instruction (mirrors auto-events' phrasing). Handles one
 // truck and multiple trucks. `now` is accepted for symmetry/future use but unused here.
-export function buildDailyPost(dayBookings, vendors, { ymd, now } = {}) {
-  const byId = new Map();
-  for (const v of vendors || []) if (v && v.id) byId.set(v.id, v);
-  const lineup = (dayBookings || []).map((b) => resolveVendor(b, byId));
+export function buildDailyPost(dayBookings, vendors, { ymd, now, rule = loadHostRule() } = {}) {
+  const lineup = lineupFor(dayBookings, vendors);
 
   const lines = lineup.map((v) => (v.hours ? `${v.name} (${v.hours})` : v.name));
   const names = lineup.map((v) => v.name);
@@ -67,14 +94,24 @@ export function buildDailyPost(dayBookings, vendors, { ymd, now } = {}) {
     `${listSentence} ` +
     `Create a branded "on the lot today" lineup graphic for Eats on 601 showing today's food ` +
     `truck${names.length === 1 ? "" : "s"} and hours, plus a short on-brand caption. ` +
-    `Trucks & hours today (${display}): ${lines.join("; ")}.`;
+    `Trucks & hours today (${display}): ${lines.join("; ")}. ` +
+    `The caption MUST end with the host credit on its own line, before any hashtags: ` +
+    `on Facebook exactly "${rule.creditLine}", on Instagram exactly "${rule.creditLineInstagram}".`;
 
   // Mirror auto-events' AUTO day-of phrasing so the drain treats this identically.
   const comment =
     `AUTO day-of post: publishes the morning of ${ymd}. Write it as a "today on the lot" ` +
-    `announcement for Eats on 601's lineup — ${lines.join(", ")}. Keep it short and on-brand.`;
+    `announcement for Eats on 601's lineup: ${lines.join(", ")}. Keep it short and on-brand. ` +
+    `End with the host credit line: "${rule.creditLine}" on Facebook, the @handle form on Instagram.`;
 
-  return { title, description, comment };
+  // Ready-to-use captions with the credit already in place, one per platform. The drain may
+  // still write its own copy, but it is handed correct text instead of asked to remember.
+  const captions = {
+    facebook: buildDailyCaption(dayBookings, vendors, { platform: "facebook", rule }),
+    instagram: buildDailyCaption(dayBookings, vendors, { platform: "instagram", rule }),
+  };
+
+  return { title, description, comment, captions };
 }
 
 // Run the day-of post. A small idempotent state machine. Deps:
@@ -106,7 +143,7 @@ export async function runDailyPost({ all, submitRequest, updateRequest, now = ne
   const crid = `${clientId}-daily-${ymd}`;
   const existing = requests.find((r) => r && r.clientId === clientId && r.meta && r.meta.clientRequestId === crid);
 
-  const { title, description, comment } = buildDailyPost(dayBookings, vendors, { ymd, now });
+  const { title, description, comment, captions } = buildDailyPost(dayBookings, vendors, { ymd, now });
 
   // The auto-markers patch: submitted → queued (action:"send") + the meta.autoEvent shape the
   // drain/auto-approve read. autoApprove is gated by config (default false → Marshall approves).
@@ -120,6 +157,9 @@ export async function runDailyPost({ all, submitRequest, updateRequest, now = ne
         ymd,
         scheduledFor: dayOfPostIso(ymd),
         autoApprove: !!config.autoApproveDaily,
+        // Credit-carrying copy rides the request into the queue, so the drain has correct
+        // text on hand and host-credit.mjs has nothing left to repair on this lane.
+        captions,
       },
     },
   };

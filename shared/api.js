@@ -4,10 +4,12 @@ import { API_BASE } from "./config.js";
 const RETRY_MS = [400, 900]; // backoff before the 1st and 2nd retry
 
 // opts.retries: how many times to re-try a TRANSIENT failure (mobile network drop,
-// the 30s script-lock "busy, try again" 409, or a 5xx). Only callers whose action is
-// safe to repeat opt in — submit is idempotent via clientRequestId; a duplicate upload
-// is at worst a harmless orphan file. All other callers pass no opts → retries: 0 →
-// behaviour is unchanged. On final network failure we still throw (contract preserved).
+// the 30s script-lock "busy, try again" 409, or a 5xx). Callers opt in per action.
+// Most opted-in actions are safely repeatable: submit is idempotent via clientRequestId,
+// a duplicate upload is at worst a harmless orphan file, and updateBooking/deleteBooking
+// just re-send the same patch against the same id. The one knowing exception is
+// addBookings (see the caveat where it's defined). Callers that pass no opts still get
+// retries: 0. On final network failure we still throw (contract preserved).
 async function http(method, query, body, opts) {
   const retries = (opts && opts.retries) || 0;
   const retryOn = (opts && opts.retryOn) || [409, 429, 500, 502, 503, 504];
@@ -62,10 +64,20 @@ export const portalApi = (clientToken, pin = "") => ({
   review: (id, verdict, note) => http("POST", "", { c: clientToken, action: "clientReviewRequest", id, verdict, note }),
   // Food Trucks: registry + schedule. addBookings is one round-trip (repeat-weekly is
   // atomic); deleteBooking takes { id } or { seriesId } to drop a whole series.
+  //
+  // All three schedule writes retry (retries: 2). The calendar is edited from a phone
+  // standing on the lot, so the dominant failure is a dropped request, and the retry that
+  // matters most is the 409 "busy, try again" lock timeout, and that one means the write
+  // did NOT happen, so repeating it is exactly right. updateBooking and deleteBooking are
+  // naturally repeatable too (same patch, same id). CAVEAT on addBookings: it is NOT
+  // idempotent server-side (no clientRequestId equivalent), so a retry after a write that
+  // landed but whose response was lost inserts the day twice. Traded deliberately: a
+  // duplicate is visible on the calendar and one tap to remove, a silently lost booking
+  // means a truck shows up to a day the lot never posted.
   upsertVendor: (vendor) => http("POST", "", { c: clientToken, action: "upsertVendor", vendor }),
-  addBookings: (bookings, seriesId) => http("POST", "", { c: clientToken, action: "addBookings", bookings, seriesId }),
-  updateBooking: (id, patch) => http("POST", "", { c: clientToken, action: "updateBooking", id, patch }),
-  deleteBooking: (sel) => http("POST", "", { c: clientToken, action: "deleteBooking", ...(sel || {}) }),
+  addBookings: (bookings, seriesId) => http("POST", "", { c: clientToken, action: "addBookings", bookings, seriesId }, { retries: 2 }),
+  updateBooking: (id, patch) => http("POST", "", { c: clientToken, action: "updateBooking", id, patch }, { retries: 2 }),
+  deleteBooking: (sel) => http("POST", "", { c: clientToken, action: "deleteBooking", ...(sel || {}) }, { retries: 2 }),
 });
 
 // Request Desk — admin token in the URL (?k=…).

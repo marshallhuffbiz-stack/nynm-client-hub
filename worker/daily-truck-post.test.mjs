@@ -1,7 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { todayInET, selectDayBookings, buildDailyPost, runDailyPost } from "./daily-truck-post.mjs";
+import { todayInET, selectDayBookings, buildDailyPost, buildDailyCaption, creditLineFor, runDailyPost } from "./daily-truck-post.mjs";
 import { dayOfPostIso } from "./events-auto.mjs";
+
+// Fixed rule so these tests do not depend on brand.json being present or current. Same
+// literals host-credit.test.mjs pins.
+const RULE = {
+  hostName: "Driven Creations Custom",
+  label: "Hosted by",
+  creditLine: "Hosted by Driven Creations Custom.",
+  creditLineInstagram: "Hosted by Driven Creations Custom (@drivencreationscustom)",
+  igHandle: "@drivencreationscustom",
+};
 
 const CLIENT = "eats-on-601";
 const TOKEN = "eats-token";
@@ -66,6 +76,57 @@ test("buildDailyPost: falls back to booking vendorName when the registry has no 
   const today = [bk({ id: "a", date: "2026-07-11", vendorId: "unregistered", vendorName: "Mystery Wagon" })];
   const { description } = buildDailyPost(today, VENDORS, { ymd: "2026-07-11" });
   assert.match(description, /Mystery Wagon/);
+});
+
+// ---- host credit: carried NATIVELY, not left to host-credit.mjs to repair ----
+
+const TODAY_TWO = [
+  bk({ id: "a", date: "2026-07-11", vendorId: "island-boys-food-truck" }),
+  bk({ id: "b", date: "2026-07-11", vendorId: "bella-sweet-boutique", startTime: "12:00", endTime: "17:00" }),
+];
+
+test("creditLineFor: Facebook gets the plain name, Instagram gets the handle form", () => {
+  assert.equal(creditLineFor("facebook", RULE), "Hosted by Driven Creations Custom.");
+  assert.equal(creditLineFor("instagram", RULE), "Hosted by Driven Creations Custom (@drivencreationscustom)");
+  assert.equal(creditLineFor(undefined, RULE), RULE.creditLine); // anything not IG takes the FB wording
+});
+
+test("the FB caption ENDS with the exact credit line, on its own last line, with no @handle", () => {
+  const caption = buildDailyCaption(TODAY_TWO, VENDORS, { platform: "facebook", rule: RULE });
+  const lines = caption.split("\n").filter((l) => l.trim());
+  assert.equal(lines[lines.length - 1], "Hosted by Driven Creations Custom.");
+  assert.ok(caption.endsWith("Hosted by Driven Creations Custom."));
+  assert.ok(!caption.includes("@drivencreationscustom"), "an @ on Facebook publishes as dead literal text");
+  assert.match(caption, /Island Boys Food Truck/); // still a real lineup caption
+});
+
+test("the IG caption carries the tappable handle form as its last line", () => {
+  const caption = buildDailyCaption(TODAY_TWO, VENDORS, { platform: "instagram", rule: RULE });
+  const lines = caption.split("\n").filter((l) => l.trim());
+  assert.equal(lines[lines.length - 1], "Hosted by Driven Creations Custom (@drivencreationscustom)");
+  assert.match(caption, /@drivencreationscustom/);
+});
+
+test("buildDailyPost hands the drain both credited captions plus the explicit wording", () => {
+  const { captions, description, comment } = buildDailyPost(TODAY_TWO, VENDORS, { ymd: "2026-07-11", rule: RULE });
+  assert.ok(captions.facebook.endsWith("Hosted by Driven Creations Custom."));
+  assert.match(captions.instagram, /Hosted by Driven Creations Custom \(@drivencreationscustom\)$/);
+  // The brief the drain reads must name the exact required line for each platform.
+  assert.match(description, /MUST end with the host credit/);
+  assert.match(description, /Hosted by Driven Creations Custom\./);
+  assert.match(description, /@drivencreationscustom/);
+  assert.match(comment, /host credit line/);
+});
+
+test("host-credit.mjs finds NOTHING to repair in a natively-credited daily caption", async () => {
+  const { ensureHostCredit, EATS_INTEGRATIONS } = await import("./host-credit.mjs");
+  const [FB, IG] = Object.keys(EATS_INTEGRATIONS);
+  for (const [id, platform] of [[FB, "facebook"], [IG, "instagram"]]) {
+    const caption = buildDailyCaption(TODAY_TWO, VENDORS, { platform: EATS_INTEGRATIONS[id], rule: RULE });
+    const r = ensureHostCredit(caption, id, RULE);
+    assert.equal(r.changed, false, `${platform} caption should need no repair`);
+    assert.equal(r.action, "ok");
+  }
 });
 
 // ---- runDailyPost (idempotent state machine; submit/update injected) ----

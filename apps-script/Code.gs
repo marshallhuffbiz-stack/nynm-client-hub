@@ -17,6 +17,13 @@
  *   holding the intended HTTP code (200/400/401/403/404/405/409/500) so the
  *   browser client can key off it in live mode. See README/summary follow-up for
  *   the one-line shared/api.js change required to read body.status in live mode.
+ *
+ * VERSION: V10 (2026-08-23). V10 closes the write-side hole in client-token auth: a
+ *   client whose `active` flag is FALSE can no longer POST. doGet already refused
+ *   them, doPost did not, so a revoked portal link kept full write access (submit a
+ *   request, book a truck, post a message). Nothing else changed and no sheet
+ *   migration is needed. Earlier markers in this file: [V7], [V9].
+ *   Deploy steps: ../../systems-reliability/APPS-SCRIPT-DEPLOY.md
  */
 
 /* ============================ Constants ============================ */
@@ -739,13 +746,19 @@ function doPost(e) {
     var adminToken = getAdminToken_();
     var adminOk = !!(body.admin && safeEquals_(body.admin, adminToken));
 
-    // Client lookup mirrors the mock POST path exactly: find by token, NO active
-    // filter here (the mock's POST handler does not check active — only GET does).
+    // [V10] Client lookup enforces `active`, exactly like the doGet client path does.
+    // It used to skip that check on purpose, to mirror the mock's POST handler. The
+    // effect was that deactivating a client killed only their portal READ (doGet 403s)
+    // while every WRITE stayed open to the same dead link: a revoked client could still
+    // submit requests, book trucks and post messages. Deactivated has to mean
+    // deactivated on both verbs.
+    // NOTE: mock-server/server.mjs still resolves the POST client with no active filter,
+    // so it is now the LOOSER of the two. Mirror this there to keep them identical.
     var clientForAuth = null;
     if (body.c) {
       var allClients = readAll_(SHEET_CLIENTS);
       for (var i = 0; i < allClients.length; i++) {
-        if (allClients[i].token === body.c) { clientForAuth = allClients[i]; break; }
+        if (allClients[i].token === body.c && allClients[i].active !== false) { clientForAuth = allClients[i]; break; }
       }
     }
 

@@ -1358,19 +1358,30 @@ async function submitNewTruck(event) {
 }
 
 async function removeBooking(id) {
+  if (busy) return;
   const b = activeBookings().find((x) => x.id === id);
   const name = b ? vendorNameFor(b) : "this truck";
   if (!window.confirm(`Remove ${name} from ${formatDate(selectedDate)}?`)) return;
-  // Optimistic: drop it now, restore on failure.
-  removeLocalBooking(id);
-  renderDayDetail();
+  // Confirm the WRITE before painting the removal. This used to drop the row locally
+  // first and only then send the delete, so a failed request showed the truck as gone
+  // and the next refresh put it back: the client read that as "I deleted it and it
+  // came back". Nothing disappears now until the server says it did. The busy guard is
+  // what the optimistic paint used to provide against a double-tap.
+  busy = true;
   try {
     const res = await api.deleteBooking({ id });
-    if (res && res.ok) { toast("Removed."); refresh(); }
-    else { toast("Couldn't remove that. Refreshing…"); refresh(); }
+    if (res && res.ok) {
+      removeLocalBooking(id);
+      renderDayDetail();
+      toast("Removed.");
+      refresh();
+    } else {
+      toast("Couldn't remove that. It's still on the calendar, please try again.");
+    }
   } catch (err) {
-    toast("Couldn't remove that. Refreshing…");
-    refresh();
+    toast("Couldn't remove that. Check your connection and try again.");
+  } finally {
+    busy = false;
   }
 }
 

@@ -138,7 +138,10 @@ export function createApp({ storePath, uploadsDir }) {
         const action = body.action;
         const data0 = await store.read();
         const adminOk = body.admin && body.admin === data0.settings?.adminToken;
-        const client = body.c ? data0.clients.find((x) => x.token === body.c) : null;
+        // `active !== false` mirrors the GET path above and Code.gs [V10]. Without it
+        // the mock is LOOSER than production: a deactivated client link is refused on
+        // reads but still writes, so local dev cannot reproduce a revoked-link bug.
+        const client = body.c ? data0.clients.find((x) => x.token === body.c && x.active !== false) : null;
 
         if (["updateRequest", "promoteEvent", "upsertClient", "deleteRequest"].includes(action) && !adminOk)
           return send(res, 403, { ok: false, error: "admin required" });

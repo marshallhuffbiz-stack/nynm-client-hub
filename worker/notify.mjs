@@ -114,6 +114,21 @@ export function makeNotifier(config = {}) {
       await macNotify(title, msg);
       await pushNotify(push, title, msg, { urgent: true });
     },
+    // The WEBSITE ship pair, mirroring notifyShipped/notifyShipFailed for social.
+    // site-apply.mjs's makeSiteShipper calls these; until they existed the optional
+    // chaining there silently swallowed every deploy outcome.
+    async notifyDeployed({ clientId, title, url }) {
+      const pushTitle = "Relay: website updated";
+      const msg = `${clientId}: "${title}" is live at ${url}.`;
+      await macNotify(pushTitle, msg);
+      await pushNotify(push, pushTitle, msg);
+    },
+    async notifyError({ clientId, title, reason }) {
+      const pushTitle = "Relay: website deploy failed";
+      const msg = `${clientId}: "${title}" didn't deploy. ${reason || ""}`.trim();
+      await macNotify(pushTitle, msg);
+      await pushNotify(push, pushTitle, msg, { urgent: true });
+    },
     async notifyAutoEvent({ entry, scheduledFor, site }) {
       const title = "Relay — event auto-scheduled";
       const siteMsg = site && site.ok ? (site.changed ? "added to the website" : "already on the website") : "website update needs a look";
