@@ -16,6 +16,7 @@ import { makeNotifier, macNotify, pushNotify } from "./notify.mjs";
 import { makeShipper, makePostizClient } from "./publish.mjs";
 import { makeAutoEvents } from "./auto-events.mjs";
 import { makeAutoPublishFallback } from "./auto-publish-fallback.mjs";
+import { makeBoardFeeder } from "./board-feed.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
 import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
@@ -43,6 +44,7 @@ export async function runOnce({
   truckPosts,
   autoEvents,
   staleFallback,
+  boardFeed,
   notifier,
   digestHour = 8,
   getLastDigest,
@@ -54,6 +56,22 @@ export async function runOnce({
   const all = await apiFetchAll(apiBase, adminToken);
   if (!all.ok) throw new Error("fetch all failed: " + (all.error || all.status));
   const reqs = all.requests || [];
+
+  // Board feed: push one `requests` signal per client to the HQ Hub Client
+  // Board, from the payload just fetched. Once per tick, immediately after the
+  // fetch so the board hears about a stuck request even on a tick where a later
+  // lane fails. Dormant unless config.board is enabled (makeBoardFeeder returns
+  // null), capped at 8s inside, and fail-soft twice over: the runner catches its
+  // own errors and this guard catches anything it somehow lets past, because a
+  // hub that is down must NEVER stop the drain/ship lanes.
+  let boardRes = { signals: 0, sent: false };
+  if (boardFeed) {
+    try {
+      boardRes = (await boardFeed({ all })) || boardRes;
+    } catch (e) {
+      console.error(new Date().toISOString(), "board feed lane error (caught, tick continues):", e && e.message ? e.message : String(e));
+    }
+  }
 
   // Recover orphaned 'drafting' rows (a drain that died / ran out of space mid-render,
   // or a manual Retry that landed in 'drafting') by re-queueing them, and orphaned
@@ -215,6 +233,8 @@ export async function runOnce({
     staleSent: staleRes.sent || 0,
     staleApproved: staleRes.approved || 0,
     staleFailed: staleRes.failed || 0,
+    boardSignals: boardRes.signals || 0,
+    boardSent: boardRes.sent === true,
     recovered,
   };
 }
@@ -660,6 +680,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       pushNotify,
     });
 
+    // Client Board feed lane, wired only when config.board.enabled is true and
+    // both url and token are filled in (makeBoardFeeder returns null otherwise,
+    // and the tick then never calls it at all).
+    const boardFeed = makeBoardFeeder({ cfg: cfg.board });
+
     const res = await runOnce({
       apiBase: cfg.execUrl,
       adminToken: cfg.adminToken,
@@ -671,6 +696,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       truckPosts,
       autoEvents,
       staleFallback,
+      boardFeed,
       notifier,
       digestHour: cfg.digestHour ?? 8,
       getLastDigest,
