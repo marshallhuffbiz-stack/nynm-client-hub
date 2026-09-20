@@ -410,3 +410,59 @@ test("runOnce: a throwing staleFallback lane is caught — the tick still comple
   assert.equal(res.staleSent, 0);
   assert.equal(res.staleApproved, 0);
 });
+
+test("runOnce: the board feed gets the tick's own payload and its counts surface", async () => {
+  let seen = null;
+  const res = await runOnce({
+    apiBase: base,
+    adminToken: "A",
+    caps: { draft: 0, ship: 0 },
+    drainer: async () => ({ drafted: 0 }),
+    shipper: async () => ({ shipped: 0, failed: 0 }),
+    boardFeed: async ({ all }) => {
+      seen = all;
+      return { signals: 2, sent: true, written: 2 };
+    },
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    now: new Date(),
+  });
+  assert.ok(seen, "the board feed ran");
+  assert.ok(Array.isArray(seen.requests), "it got the real admin payload (has requests[])");
+  assert.ok(Array.isArray(seen.clients), "and the clients it needs one signal per");
+  assert.equal(res.boardSignals, 2);
+  assert.equal(res.boardSent, true);
+});
+
+test("runOnce FAIL-SOFT: a throwing board feed never breaks the tick (drain/ship still run)", async () => {
+  let drained = false;
+  let res;
+  await assert.doesNotReject(async () => {
+    res = await runOnce({
+      apiBase: base,
+      adminToken: "A",
+      drainer: async () => { drained = true; return { drafted: 0 }; },
+      shipper: async () => ({ shipped: 0, failed: 0 }),
+      boardFeed: async () => { throw new Error("hub unreachable"); },
+      notifier: { async notifyNew() {}, async notifyDigest() {} },
+      now: new Date(),
+    });
+  });
+  assert.ok(res, "runOnce returned normally despite the board feed throwing");
+  assert.equal(res.boardSignals, 0);
+  assert.equal(res.boardSent, false);
+  assert.ok(drained, "the drain lane still ran");
+});
+
+test("runOnce: no board feed wired means the tick reports nothing about it", async () => {
+  const res = await runOnce({
+    apiBase: base,
+    adminToken: "A",
+    caps: { draft: 0, ship: 0 },
+    drainer: async () => ({ drafted: 0 }),
+    shipper: async () => ({ shipped: 0, failed: 0 }),
+    notifier: { async notifyNew() {}, async notifyDigest() {} },
+    now: new Date(),
+  });
+  assert.equal(res.boardSignals, 0);
+  assert.equal(res.boardSent, false);
+});

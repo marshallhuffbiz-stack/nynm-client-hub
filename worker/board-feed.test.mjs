@@ -1,0 +1,290 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import {
+  boardConfig,
+  buildRequestSignals,
+  sanitizeTitle,
+  sendBoardSignals,
+  makeBoardFeeder,
+  BOARD_STALE_AFTER_MS,
+} from "./board-feed.mjs";
+
+const NOW = new Date("2026-09-17T18:00:00Z");
+const hoursAgo = (h) => new Date(NOW.getTime() - h * 3600 * 1000).toISOString();
+
+const CLIENTS = [{ clientId: "the-o", name: "The O", active: true }];
+
+const req = (over) => ({
+  id: "r1",
+  clientId: "the-o",
+  type: "post",
+  title: "Trivia night post",
+  stage: "submitted",
+  createdAt: hoursAgo(1),
+  updatedAt: hoursAgo(1),
+  ...over,
+});
+
+const only = (requests, clients = CLIENTS) => buildRequestSignals({ clients, requests, now: NOW })[0];
+
+// ---- config gate ----
+
+test("boardConfig: absent, empty or disabled blocks all sending", () => {
+  assert.equal(boardConfig().enabled, false);
+  assert.equal(boardConfig(null).enabled, false);
+  assert.equal(boardConfig({ url: "https://hq.example", token: "t" }).enabled, false);
+  assert.equal(boardConfig({ enabled: true, token: "t" }).enabled, false, "no url = off");
+  assert.equal(boardConfig({ enabled: true, url: "https://hq.example" }).enabled, false, "no token = off");
+
+  const on = boardConfig({ enabled: true, url: "https://hq.example/", token: "t" });
+  assert.equal(on.enabled, true);
+  assert.equal(on.url, "https://hq.example", "trailing slash trimmed");
+  assert.equal(on.actingFor, "marshall", "default hub user the feeder acts for");
+});
+
+// ---- the state table ----
+
+test("state: a request in error is a problem, headlined with its title", () => {
+  const signal = only([req({ stage: "error", title: "Bike night flyer" })]);
+  assert.equal(signal.source, "requests");
+  assert.equal(signal.relay_id, "the-o");
+  assert.equal(signal.state, "problem");
+  assert.equal(signal.headline, "Request failed: Bike night flyer");
+  assert.equal(signal.stale_after_ms, BOARD_STALE_AFTER_MS);
+  assert.deepEqual(signal.detail.errors.map((r) => r.id), ["r1"]);
+});
+
+test("state: waiting on Marshall over 24 hours is a problem, in whole days", () => {
+  const twoDays = only([req({ stage: "ready", updatedAt: hoursAgo(50), title: "Fall poster" })]);
+  assert.equal(twoDays.state, "problem");
+  assert.equal(twoDays.headline, "Waiting on you 2 days: Fall poster");
+
+  const oneDay = only([req({ stage: "submitted", updatedAt: hoursAgo(30), title: "Fall poster" })]);
+  assert.equal(oneDay.state, "problem");
+  assert.equal(oneDay.headline, "Waiting on you 1 day: Fall poster");
+  assert.deepEqual(oneDay.detail.waiting.map((r) => r.id), ["r1"]);
+});
+
+test("state: an error outranks a long wait in the headline", () => {
+  const signal = only([
+    req({ id: "old", stage: "ready", updatedAt: hoursAgo(50), title: "Old one" }),
+    req({ id: "bad", stage: "error", title: "Broken one" }),
+  ]);
+  assert.equal(signal.state, "problem");
+  assert.equal(signal.headline, "Request failed: Broken one");
+});
+
+test("state: a fresh draft ready for approval is needs_you, and the count is plural-correct", () => {
+  const one = only([req({ stage: "ready", updatedAt: hoursAgo(2) })]);
+  assert.equal(one.state, "needs_you");
+  assert.equal(one.headline, "1 draft ready for your tap");
+
+  const two = only([
+    req({ id: "a", stage: "ready", updatedAt: hoursAgo(2) }),
+    req({ id: "b", stage: "ready", updatedAt: hoursAgo(3) }),
+  ]);
+  assert.equal(two.headline, "2 drafts ready for your tap");
+  assert.deepEqual(two.detail.ready.map((r) => r.id), ["b", "a"], "oldest wait first");
+});
+
+test("state: a fresh submitted request nobody has picked up yet is needs_you", () => {
+  const signal = only([req({ stage: "submitted", updatedAt: hoursAgo(2), title: "New sign copy" })]);
+  assert.equal(signal.state, "needs_you");
+  assert.equal(signal.headline, "New request: New sign copy");
+  assert.equal(signal.action, null, "nothing to approve yet");
+});
+
+test("state: work in the machine lanes is good, and so is an empty queue", () => {
+  const busy = only([
+    req({ id: "a", stage: "queued" }),
+    req({ id: "b", stage: "drafting" }),
+    req({ id: "c", stage: "approved" }),
+    req({ id: "d", stage: "shipping" }),
+    req({ id: "e", stage: "changes" }),
+  ]);
+  assert.equal(busy.state, "good");
+  assert.equal(busy.headline, "Nothing waiting on you");
+  assert.equal(busy.detail.open, 5, "still counted as open work in the detail");
+
+  const done = only([req({ stage: "done" })]);
+  assert.equal(done.state, "good");
+  assert.equal(done.detail.open, 0);
+
+  const nothing = only([]);
+  assert.equal(nothing.state, "good");
+  assert.equal(nothing.headline, "Nothing waiting on you");
+});
+
+test("state: anything older than 14 days never raises a state (the parked-row guard)", () => {
+  const ancient = only([
+    req({ id: "a", stage: "error", createdAt: hoursAgo(15 * 24), updatedAt: hoursAgo(15 * 24) }),
+    req({ id: "b", stage: "ready", createdAt: hoursAgo(20 * 24), updatedAt: hoursAgo(20 * 24) }),
+  ]);
+  assert.equal(ancient.state, "good");
+  assert.equal(ancient.headline, "Nothing waiting on you");
+  assert.equal(ancient.detail.open, 0);
+  assert.deepEqual(ancient.detail.ready, []);
+  assert.deepEqual(ancient.detail.errors, []);
+
+  // Just inside the window still counts.
+  const recent = only([req({ stage: "error", createdAt: hoursAgo(13 * 24), updatedAt: hoursAgo(13 * 24) })]);
+  assert.equal(recent.state, "problem");
+});
+
+test("one signal per active Relay client, and a client with no requests reads good", () => {
+  const clients = [
+    { clientId: "the-o", name: "The O", active: true },
+    { clientId: "eats-on-601", name: "Eats on 601" },
+    { clientId: "gone", name: "Left us", active: false },
+  ];
+  const signals = buildRequestSignals({
+    clients,
+    requests: [req({ clientId: "the-o", stage: "ready", updatedAt: hoursAgo(2) })],
+    now: NOW,
+  });
+  assert.deepEqual(signals.map((s) => s.relay_id), ["the-o", "eats-on-601"]);
+  assert.equal(signals[1].state, "good");
+  assert.equal(signals[1].detail.open, 0);
+});
+
+// ---- titles are client-written text ----
+
+test("titles: control characters and newlines are stripped, and 60 chars is the ceiling", () => {
+  assert.equal(sanitizeTitle("line one\nline\ttwo\u0007"), "line one line two");
+  assert.equal(sanitizeTitle(null), "Untitled request");
+
+  const long = "x".repeat(200);
+  const clamped = sanitizeTitle(long);
+  assert.equal(clamped.length, 60);
+  assert.ok(clamped.endsWith("…"), "clamped titles end in an ellipsis");
+
+  const signal = only([req({ stage: "error", title: "Post about the\nnew hours\u0000" })]);
+  assert.equal(signal.headline, "Request failed: Post about the new hours");
+  assert.equal(signal.detail.errors[0].title, "Post about the new hours");
+});
+
+// ---- the action ----
+
+test("action: a ready draft carries the request id and the approve verb, never a Desk key", () => {
+  const signal = only([
+    req({ id: "a", stage: "ready", updatedAt: hoursAgo(2) }),
+    req({ id: "b", stage: "ready", updatedAt: hoursAgo(9) }),
+  ]);
+  assert.deepEqual(signal.action, {
+    label: "Review draft",
+    href: null,
+    requestId: "b",
+    relayAction: "approve",
+  });
+  assert.equal(JSON.stringify(signal).includes("?k="), false, "no Desk token anywhere in the payload");
+});
+
+// ---- the sender ----
+
+function fakeResponse(status, body = { written: 1 }) {
+  return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => JSON.stringify(body) };
+}
+
+test("sender: the gate is off by default, so no fetch and no log", async () => {
+  let calls = 0;
+  const logs = [];
+  const res = await sendBoardSignals({
+    cfg: boardConfig(),
+    signals: [{ source: "requests" }],
+    fetchImpl: async () => { calls += 1; return fakeResponse(200); },
+    log: (...args) => logs.push(args),
+  });
+  assert.equal(res.sent, false);
+  assert.equal(calls, 0);
+  assert.deepEqual(logs, []);
+});
+
+test("sender: posts the batch with a Bearer header and reports what was written", async () => {
+  let seen = null;
+  const res = await sendBoardSignals({
+    cfg: boardConfig({ enabled: true, url: "https://hq.example/", token: "svc-token", actingFor: "marshall" }),
+    signals: [{ source: "requests", relay_id: "the-o", state: "good" }],
+    fetchImpl: async (url, opts) => {
+      seen = { url, opts };
+      return fakeResponse(200, { written: 1, skipped: [] });
+    },
+  });
+  assert.equal(res.sent, true);
+  assert.equal(res.written, 1);
+  assert.equal(seen.url, "https://hq.example/api/board/signals");
+  assert.equal(seen.opts.method, "POST");
+  assert.equal(seen.opts.headers["content-type"], "application/json");
+  assert.equal(seen.opts.headers.authorization, "Bearer svc-token");
+  assert.equal(seen.opts.headers["x-acting-for"], "marshall");
+  assert.deepEqual(JSON.parse(seen.opts.body).signals.length, 1);
+  assert.ok(seen.opts.signal, "an abort signal is attached");
+});
+
+test("sender FAIL-SOFT: a 500, a thrown fetch and a timeout are one log line each, never a throw", async () => {
+  const cfg = boardConfig({ enabled: true, url: "https://hq.example", token: "t" });
+
+  const logs = [];
+  const five = await sendBoardSignals({
+    cfg,
+    signals: [],
+    fetchImpl: async () => fakeResponse(500, { error: "boom" }),
+    log: (...args) => logs.push(args.join(" ")),
+  });
+  assert.equal(five.sent, false);
+  assert.equal(five.status, 500);
+  assert.equal(logs.length, 1);
+
+  const thrownLogs = [];
+  const thrown = await sendBoardSignals({
+    cfg,
+    signals: [],
+    fetchImpl: async () => { throw new Error("connect ECONNREFUSED"); },
+    log: (...args) => thrownLogs.push(args.join(" ")),
+  });
+  assert.equal(thrown.sent, false);
+  assert.equal(thrownLogs.length, 1);
+
+  const timeoutLogs = [];
+  const timed = await sendBoardSignals({
+    cfg,
+    signals: [],
+    timeoutMs: 5,
+    // A fetch that never settles until its abort signal fires, which is what a
+    // hung hub looks like from here.
+    fetchImpl: (url, opts) =>
+      new Promise((resolve, reject) => {
+        opts.signal.addEventListener("abort", () => reject(new Error("The operation was aborted")));
+      }),
+    log: (...args) => timeoutLogs.push(args.join(" ")),
+  });
+  assert.equal(timed.sent, false);
+  assert.equal(timeoutLogs.length, 1);
+});
+
+// ---- the bound lane ----
+
+test("makeBoardFeeder: null when the gate is off, and a fail-soft runner when it is on", async () => {
+  assert.equal(makeBoardFeeder({ cfg: undefined }), null);
+  assert.equal(makeBoardFeeder({ cfg: { enabled: false, url: "https://hq.example", token: "t" } }), null);
+
+  let body = null;
+  const feeder = makeBoardFeeder({
+    cfg: { enabled: true, url: "https://hq.example", token: "t" },
+    fetchImpl: async (url, opts) => { body = JSON.parse(opts.body); return fakeResponse(200, { written: 1 }); },
+    now: () => NOW,
+  });
+  const res = await feeder({ all: { clients: CLIENTS, requests: [req({ stage: "ready", updatedAt: hoursAgo(2) })] } });
+  assert.equal(res.signals, 1);
+  assert.equal(res.sent, true);
+  assert.equal(body.signals[0].state, "needs_you");
+
+  // A hub that answers with a wall of HTML (the Apps Script failure mode, and a
+  // proxy's) must not reach the tick either.
+  const angry = makeBoardFeeder({
+    cfg: { enabled: true, url: "https://hq.example", token: "t" },
+    fetchImpl: async () => { throw new Error("socket hang up"); },
+    now: () => NOW,
+    log: () => {},
+  });
+  await assert.doesNotReject(() => angry({ all: { clients: CLIENTS, requests: [] } }));
+});

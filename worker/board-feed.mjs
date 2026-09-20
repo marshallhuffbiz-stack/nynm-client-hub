@@ -1,0 +1,258 @@
+// worker/board-feed.mjs: Relay's push into the HQ Hub Client Board.
+//
+// The board carries one `requests` signal per Relay client, and it is PUSHED
+// rather than pulled: the Apps Script backend answers a VPS read with HTML often
+// enough that a hub polling it would read blind for no reason, while this worker
+// already holds a good copy of every client and every request each 90 second
+// tick. So the tick hands what it already fetched to a pure function, and the
+// sender posts one batch to the hub.
+//
+// Three properties this lane must keep, in order of importance:
+//
+//   1. It can never break a tick. Any failure is one log line and a return; the
+//      drain, the shipper and the site lane never see it. A hub that is down
+//      makes the board read blind after `stale_after_ms`, which is exactly what
+//      the board's staleness rule is for.
+//   2. It never leaks a secret. The Desk admin key stays in this worker: the
+//      action it sends names a request id and a verb, never a URL carrying `?k=`.
+//   3. It is entirely config gated. No `board` block, or `enabled: false`, and
+//      the lane does not exist: no fetch, no log line, nothing.
+//
+// Everything is dependency-injected (fetch, clock, log) so the whole lane is
+// unit-tested without a network.
+
+// How long the hub should believe a reading from this feed. Six missed ticks.
+export const BOARD_STALE_AFTER_MS = 30 * 60 * 1000;
+
+// Waiting on Marshall for longer than this is a problem, not a nudge.
+const WAITING_PROBLEM_HOURS = 24;
+
+// The parked-row guard. This MIRRORS auto-publish-fallback.mjs's
+// `skipOlderThanHours` idea and exists for the same reason: a request nobody
+// ever closed is a graveyard row, not news, and a board that lights up forever
+// over a request from June is a board Marshall stops reading. Anything created
+// more than this long ago is invisible to every rule below.
+const IGNORE_OLDER_THAN_HOURS = 14 * 24;
+
+// The stages that mean a human has to do something. `submitted` is a request
+// nobody has sent to the drain yet; `ready` is a draft staged and unapproved.
+// Everything else in core/model.mjs is either a machine lane (queued, drafting,
+// approved, shipping), a live conversation with the client (`changes`), or
+// closed (`done`, or `error`, which gets its own rule below).
+const WAITING_STAGES = new Set(["submitted", "ready"]);
+
+const OPEN_STAGES = new Set(["submitted", "queued", "drafting", "ready", "changes", "approved", "shipping", "error"]);
+
+const TITLE_MAX = 60;
+
+// Normalize the config block (cfg.board from config.json). Absent, disabled or
+// half-filled → off. A lane with no url or no token is not a lane.
+export function boardConfig(raw) {
+  const c = raw && typeof raw === "object" ? raw : {};
+  const url = String(c.url || "").trim().replace(/\/+$/, "");
+  const token = String(c.token || "").trim();
+  const actingFor = String(c.actingFor || "").trim() || "marshall";
+  return {
+    enabled: c.enabled === true && !!url && !!token,
+    url,
+    token,
+    actingFor,
+  };
+}
+
+// A request title is client-written text. It is rendered on the board and read
+// back by a person, so it arrives here as plain data: control characters and
+// newlines out, whitespace collapsed, and a hard ceiling so one long paste
+// cannot push a card off the screen.
+export function sanitizeTitle(raw) {
+  const cleaned = String(raw == null ? "" : raw)
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) return "Untitled request";
+  return cleaned.length > TITLE_MAX ? cleaned.slice(0, TITLE_MAX - 1) + "…" : cleaned;
+}
+
+function hoursSince(iso, now) {
+  const at = iso ? Date.parse(iso) : NaN;
+  if (Number.isNaN(at)) return null;
+  return (now.getTime() - at) / 3600000;
+}
+
+const round1 = (n) => Math.round(n * 10) / 10;
+
+// How long this row has been sitting in its current stage, near enough: the
+// backend stamps updatedAt on every write, so a draft that went ready an hour
+// ago reads as an hour even when the request itself is a week old. createdAt is
+// the fallback, and the parked-row guard below always uses createdAt.
+function waitHours(r, now) {
+  const updated = hoursSince(r.updatedAt, now);
+  if (updated !== null) return updated;
+  return hoursSince(r.createdAt, now);
+}
+
+function item(r, now) {
+  const age = hoursSince(r.createdAt, now);
+  return {
+    id: String(r.id || ""),
+    title: sanitizeTitle(r.title || r.type),
+    type: String(r.type || ""),
+    ageHours: age === null ? null : round1(age),
+  };
+}
+
+const days = (hours) => {
+  const d = Math.floor(hours / 24);
+  return `${d} day${d === 1 ? "" : "s"}`;
+};
+
+// One client's requests signal. Pure: everything it needs is already in hand.
+function signalFor(client, requests, now) {
+  const mine = requests.filter((r) => {
+    if (!r || r.clientId !== client.clientId) return false;
+    // Unparseable dates fail closed: an undatable row can neither raise a state
+    // nor be counted, exactly like the fallback lane treats one.
+    const age = hoursSince(r.createdAt, now);
+    if (age === null || age > IGNORE_OLDER_THAN_HOURS) return false;
+    return true;
+  });
+
+  const byWaitDesc = (a, b) => waitHours(b, now) - waitHours(a, now);
+  const errors = mine.filter((r) => r.stage === "error").sort(byWaitDesc);
+  const ready = mine.filter((r) => r.stage === "ready").sort(byWaitDesc);
+  const waiting = mine
+    .filter((r) => WAITING_STAGES.has(r.stage) && (waitHours(r, now) || 0) >= WAITING_PROBLEM_HOURS)
+    .sort(byWaitDesc);
+  const freshSubmits = mine.filter((r) => r.stage === "submitted" && !waiting.includes(r)).sort(byWaitDesc);
+  const open = mine.filter((r) => OPEN_STAGES.has(r.stage));
+
+  let state = "good";
+  let headline = "Nothing waiting on you";
+  if (errors.length) {
+    state = "problem";
+    headline = `Request failed: ${sanitizeTitle(errors[0].title || errors[0].type)}`;
+  } else if (waiting.length) {
+    state = "problem";
+    headline = `Waiting on you ${days(waitHours(waiting[0], now))}: ${sanitizeTitle(waiting[0].title || waiting[0].type)}`;
+  } else if (ready.length) {
+    state = "needs_you";
+    headline = `${ready.length} draft${ready.length === 1 ? "" : "s"} ready for your tap`;
+  } else if (freshSubmits.length) {
+    state = "needs_you";
+    headline = `New request: ${sanitizeTitle(freshSubmits[0].title || freshSubmits[0].type)}`;
+  }
+
+  // The one useful next step, and only when there is a draft to approve.
+  //
+  // `href` is deliberately null. The Desk has no per-request route at all, and
+  // its admin key rides the URL as `?k=` (shared/token.js), so the only keyless
+  // Desk link that works is the root one, and only on a browser that already
+  // holds the token in localStorage. A link the hub could hand to the wrong
+  // person, or a dead-end for the right one, is worse than no link: the hub
+  // supplies its own button off `relayAction` instead, and the key never leaves
+  // this worker.
+  const action = ready.length
+    ? { label: "Review draft", href: null, requestId: String(ready[0].id || ""), relayAction: "approve" }
+    : null;
+
+  return {
+    relay_id: client.clientId,
+    source: "requests",
+    state,
+    headline,
+    detail: {
+      open: open.length,
+      ready: ready.map((r) => item(r, now)),
+      waiting: waiting.map((r) => item(r, now)),
+      errors: errors.map((r) => item(r, now)),
+    },
+    action,
+    stale_after_ms: BOARD_STALE_AFTER_MS,
+  };
+}
+
+/**
+ * One `requests` signal per active Relay client, from the tick's own payload.
+ * Pure: no clock of its own, no I/O.
+ */
+export function buildRequestSignals({ clients = [], requests = [], now = new Date() } = {}) {
+  return (clients || [])
+    .filter((c) => c && c.clientId && c.active !== false)
+    .map((c) => signalFor(c, requests || [], now));
+}
+
+/**
+ * POST the batch to the hub. Never throws, never retries: the next tick is 90
+ * seconds away and the board's own staleness rule covers the gap.
+ */
+export async function sendBoardSignals({
+  cfg,
+  signals,
+  fetchImpl = fetch,
+  timeoutMs = 8000,
+  log = console.error,
+  stamp = () => new Date().toISOString(),
+}) {
+  const resolved = cfg && cfg.enabled !== undefined ? cfg : boardConfig(cfg);
+  if (!resolved.enabled) return { sent: false, skipped: true };
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetchImpl(`${resolved.url}/api/board/signals`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${resolved.token}`,
+        // The hub resolves a service caller to a real user row, so the batch
+        // says whose board it is writing. Never a secret, just a user key.
+        "x-acting-for": resolved.actingFor,
+      },
+      body: JSON.stringify({ signals: signals || [] }),
+      signal: controller.signal,
+    });
+    if (!res || !res.ok) {
+      const status = res ? res.status : 0;
+      log(stamp(), `board feed: hub answered ${status} (tick continues)`);
+      return { sent: false, status };
+    }
+    let body = {};
+    try {
+      body = (await res.json()) || {};
+    } catch {
+      body = {};
+    }
+    return { sent: true, status: res.status, written: Number(body.written) || 0 };
+  } catch (e) {
+    log(stamp(), "board feed failed (caught, tick continues):", e && e.message ? e.message : String(e));
+    return { sent: false, error: true };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Bind the lane for the poller: config resolved once, null when the gate is off
+ * so the tick never even calls it. The returned runner takes the tick's `all`
+ * payload and is itself fail-soft.
+ */
+export function makeBoardFeeder({ cfg, fetchImpl = fetch, timeoutMs = 8000, log = console.error, now = () => new Date() }) {
+  const resolved = boardConfig(cfg);
+  if (!resolved.enabled) return null;
+
+  return async ({ all = {} } = {}) => {
+    try {
+      const signals = buildRequestSignals({
+        clients: all.clients || [],
+        requests: all.requests || [],
+        now: now(),
+      });
+      const res = await sendBoardSignals({ cfg: resolved, signals, fetchImpl, timeoutMs, log });
+      return { signals: signals.length, sent: res.sent === true, written: res.written || 0 };
+    } catch (e) {
+      log(new Date().toISOString(), "board feed lane error (caught, tick continues):", e && e.message ? e.message : String(e));
+      return { signals: 0, sent: false, written: 0 };
+    }
+  };
+}
