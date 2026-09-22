@@ -38,5 +38,23 @@ Nothing ships without Marshall's approval. Website/design fixes are prepared for
 ## Going live
 See **[SETUP.md](SETUP.md)** — create the Sheet, deploy the Apps Script, flip `shared/config.js` to live, host the pages, install the worker.
 
+## Website changes: the site lane on the VPS
+
+An approved `website` request is applied by `worker/site-apply.mjs`: commit only
+the drafted files into that client's checkout, push `main`, run the site's
+`deploy.steps` (build, then `wrangler pages deploy`), then poll the live URL
+until the change is on it. No client site is git-connected on Cloudflare
+Pages, so the deploy steps are what puts a change live; without them a push
+changes nothing and the request would sit at "pushed but not confirmed live".
+
+Checkouts live under `/home/relay/sites/` (Eats at `/home/relay/Eats On 601
+Website`), one write deploy key per repo in `/home/relay/.ssh/`, and the map
+of sites in `worker/config.json` (`sites.<clientId>.deploy`). The Cloudflare
+credentials come from `config.cloudflare`, written by
+`scripts/cf-token-setup.sh`, and reach wrangler only through the environment.
+The schedule lane (`schedule-sync.mjs`) runs the same deploy steps after its
+push. Adding a site: repo on GitHub, deploy key, clone as `relay`, prove the
+build as `relay`, add the `sites` entry, then ship one real request.
+
 ## Status
 Built 2026-06-16. Local system is complete and browser-verified (27 tests green). Production wiring (Google Sheet / deploy / Postiz channels / public host / worker install) is the deferred checklist in SETUP.md — it needs Marshall's accounts.
