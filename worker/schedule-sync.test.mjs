@@ -219,3 +219,16 @@ test("reconcile: pushed but live never confirms → not verified, surfaced", asy
   assert.equal(res.verified, false);
   assert.match(res.reason, /not confirmed live/i);
 });
+
+test("reconcile: with a deployer, the upload runs after the push and a failed upload is never a false done", async () => {
+  const calls = [];
+  const okDeploy = { run: async () => { calls.push("run"); return { ok: true }; } };
+  const git = fakeGit(), io = fakeIO({}, true), live = fakeLive(true);
+  const res = await reconcile({ fetchState, git, io, live, config: CONFIG, now: NOW, deploy: okDeploy });
+  assert.equal(res.ok, true);
+  assert.deepEqual(calls, ["run"]);
+  const bad = { run: async () => ({ ok: false, err: "wrangler: 401" }) };
+  const res2 = await reconcile({ fetchState, git: fakeGit(), io: fakeIO({}, true), live: fakeLive(true), config: CONFIG, now: NOW, deploy: bad });
+  assert.equal(res2.ok, false);
+  assert.match(res2.reason, /deploy failed: wrangler: 401/);
+});

@@ -6,7 +6,7 @@
 // worker/out/<id>/scratch/<repo-rel-path> plus a manifest:
 //   { files:[...repo-rel...], commitMessage, verify:{ absentOnLive:[...], presentOnLive:[...] } }
 // On approval this module: guards the repo, copies the corrected files in, commits ONLY
-// those files, pushes main (Cloudflare Pages deploys), then POLLS THE LIVE URL until the
+// those files, pushes main, runs the site's deploy steps (wrangler upload), then POLLS THE LIVE URL until the
 // verify assertions hold. It reports `verified:true` only when the change is actually on
 // the live page — so the caller can mark the request done ONLY when done means live.
 //
@@ -17,9 +17,9 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 
-function run(cmd, args, cwd) {
+function run(cmd, args, cwd, opts = {}) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { cwd, maxBuffer: 8 * 1024 * 1024 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { cwd, maxBuffer: 8 * 1024 * 1024, ...opts }, (err, stdout, stderr) => {
       resolve({ ok: !err, out: (stdout || "").toString().trim(), err: (stderr || "").toString().trim() });
     });
   });
@@ -36,6 +36,30 @@ export function makeRepoGit(cwd) {
     add: (files) => run("git", ["add", "--", ...files], cwd),
     commit: (m) => run("git", ["commit", "-m", m], cwd),
     push: () => run("git", ["push", "origin", "main"], cwd),
+  };
+}
+
+// Deploy adapter. None of the client sites are git-connected on Cloudflare Pages: every
+// one is a wrangler direct upload, so a push on its own changes nothing on the live URL.
+// `site.deploy.steps` is the ordered list of [cmd, ...args] to run in the site dir after
+// the push (a build, then `wrangler pages deploy`). Returns null when a site has no
+// steps, which keeps the old push-only behaviour for a site that IS git-connected.
+// Secrets (CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID) arrive through `env`, never
+// through the step arguments, so they are not in the process list or the logs.
+export function makeDeployer(site, env = process.env) {
+  const steps = site && site.deploy && Array.isArray(site.deploy.steps) ? site.deploy.steps : [];
+  if (!steps.length) return null;
+  const timeout = Number(site.deploy.timeoutMs) || 10 * 60 * 1000;
+  return {
+    run: async () => {
+      for (const step of steps) {
+        if (!Array.isArray(step) || !step.length) return { ok: false, err: "deploy step is not a [cmd, ...args] array" };
+        const [cmd, ...args] = step;
+        const r = await run(cmd, args, site.dir, { env, timeout });
+        if (!r.ok) return { ok: false, err: `${step.join(" ")}: ${(r.err || r.out || "no output").slice(-600)}` };
+      }
+      return { ok: true };
+    },
   };
 }
 
@@ -114,7 +138,7 @@ export async function verifyLive({
 //   { ok:false, skipped:true, reason }                → guard tripped; leave approved, retry next tick
 //   { ok:false, pushed:true, verified:false, reason } → pushed but not yet live; surface + notify
 //   { ok:false, verified:false, reason }              → a git step failed; surface + notify
-export async function applySiteChange({ manifest, git, io, live }) {
+export async function applySiteChange({ manifest, git, io, live, deploy = null }) {
   const files = (manifest && manifest.files) || [];
   const verify = (manifest && manifest.verify) || { absentOnLive: [], presentOnLive: [] };
 
@@ -134,7 +158,13 @@ export async function applySiteChange({ manifest, git, io, live }) {
   // Already committed on a prior tick (or a genuine no-op): don't re-commit; just confirm
   // it's actually live now. This self-heals a deploy that was still building last tick.
   if (!applied.changed) {
-    const v = await live.check(verify);
+    let v = await live.check(verify);
+    // Committed and pushed on a prior tick but the upload never ran or failed: run it now.
+    if (!v.ok && deploy) {
+      const d = await deploy.run();
+      if (!d.ok) return { ok: false, changed: false, pushed: false, deployed: false, verified: false, reason: "deploy failed: " + d.err };
+      v = await live.check(verify);
+    }
     return v.ok
       ? { ok: true, changed: false, verified: true }
       : { ok: false, changed: false, pushed: false, verified: false, reason: "already committed but not confirmed live: " + v.reason };
@@ -146,6 +176,11 @@ export async function applySiteChange({ manifest, git, io, live }) {
   if (!commit.ok) return { ok: false, verified: false, reason: "git commit failed: " + (commit.err || commit.out) };
   const push = await git.push();
   if (!push.ok) return { ok: false, verified: false, reason: "git push failed: " + (push.err || push.out) };
+
+  if (deploy) {
+    const d = await deploy.run();
+    if (!d.ok) return { ok: false, changed: true, pushed: true, deployed: false, verified: false, reason: "pushed, but the deploy failed: " + d.err };
+  }
 
   const v = await live.check(verify);
   if (v.ok) return { ok: true, changed: true, verified: true };
@@ -184,7 +219,7 @@ export function makeSiteShipper({ apiUpdate, notifier = {}, prepare, apply = app
         continue;
       }
       await apiUpdate(apiBase, adminToken, r.id, { action: "ship", _note: `deploying to ${prep.liveUrl}` });
-      const res = await apply({ manifest: prep.manifest, git: prep.git, io: prep.io, live: prep.live });
+      const res = await apply({ manifest: prep.manifest, git: prep.git, io: prep.io, live: prep.live, deploy: prep.deploy || null });
       if (res.ok && res.verified) {
         // Record the outcome in meta.run (preserving existing meta — the backend
         // deep-merges, but carry it anyway like publish.mjs does) so the portal

@@ -19,7 +19,7 @@ import { makeAutoPublishFallback } from "./auto-publish-fallback.mjs";
 import { makeBoardFeeder } from "./board-feed.mjs";
 import { makeExtractor, makeRunClaude } from "./extract-event.mjs";
 import { syncSiteEvent, makeGit, makeEventsIO } from "./site-sync.mjs";
-import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive } from "./site-apply.mjs";
+import { makeSiteShipper, makeRepoGit, makeFilesIO, makeLive, makeDeployer } from "./site-apply.mjs";
 import { buildSchedule, reconcile as reconcileSchedule, makeScheduleIO } from "./schedule-sync.mjs";
 import { runDailyPost } from "./daily-truck-post.mjs";
 import { runMonthly } from "./monthly-truck-post.mjs";
@@ -292,6 +292,7 @@ export async function runScheduleSync({ cfg = {}, all = {}, prepare, now = new D
       const res = await reconcileSchedule({
         fetchState: async () => ({ bookings: clientBookings, vendors: clientVendors }),
         git: prep.git,
+        deploy: prep.deploy || null,
         io: prep.io,
         live: prep.live,
         config: prep.config || sched,
@@ -623,6 +624,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     // (dormant otherwise). Each entry maps a clientId to its site working dir + live URL:
     //   "sites": { "eats-on-601": { "dir": "/…/Eats On 601 Website", "liveUrl": "https://eatson601.com" } }
     // prepare() loads the drain's manifest (worker/out/<id>/manifest.json) + scratch files
+    // Environment for a site's deploy steps: the worker's own env plus the Cloudflare
+    // credentials from config.cloudflare, under the names wrangler reads. Kept out of
+    // the step arguments so the token never shows in a process list or a log line.
+    const deployEnv = (c) => ({
+      ...process.env,
+      ...(c.cloudflare && c.cloudflare.apiToken ? { CLOUDFLARE_API_TOKEN: c.cloudflare.apiToken } : {}),
+      ...(c.cloudflare && c.cloudflare.accountId ? { CLOUDFLARE_ACCOUNT_ID: c.cloudflare.accountId } : {}),
+    });
     // and binds the git/io/live adapters for that client's repo.
     let siteShipper = null;
     if (cfg.sites && Object.keys(cfg.sites).length) {
@@ -642,6 +651,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           git: makeRepoGit(site.dir),
           io: makeFilesIO(site.dir, join(outDir, "scratch")),
           live: makeLive(site.liveUrl),
+          deploy: makeDeployer(site, deployEnv(cfg)),
           liveUrl: site.liveUrl,
         };
       };
@@ -658,6 +668,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         git: makeRepoGit(site.dir),
         io: makeScheduleIO(site.dir),
         live: makeLive(site.liveUrl),
+        deploy: makeDeployer(site, deployEnv(cfg)),
         config: site.schedule,
       });
       scheduleSync = ({ all }) => runScheduleSync({ cfg, all, prepare: prepareScheduleSite });

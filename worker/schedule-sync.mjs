@@ -136,7 +136,7 @@ function serialize(arr) {
 //   { ok:false, skipped:true, reason }                  → guard tripped (off-main/dirty/pull)
 //   { ok:false, changed:true, verified:false, reason }  → pushed but not confirmed live
 //   { ok:false, reason }                                → a git step failed
-export async function reconcile({ fetchState, git, io, live, config = {}, now = new Date() }) {
+export async function reconcile({ fetchState, git, io, live, config = {}, now = new Date(), deploy = null }) {
   const scheduleRel = config.scheduleFile || "src/content/schedule.json";
   const vendorsRel = config.vendorsFile || "src/content/vendors.json";
 
@@ -195,6 +195,12 @@ export async function reconcile({ fetchState, git, io, live, config = {}, now = 
   if (!commit.ok) return { ok: false, verified: false, reason: "git commit failed: " + (commit.err || commit.out), note: projectVendorsNote };
   const push = await git.push();
   if (!push.ok) return { ok: false, verified: false, reason: "git push failed: " + (push.err || push.out), note: projectVendorsNote };
+
+  // The site is a wrangler direct upload, not git-connected: run its deploy steps.
+  if (deploy) {
+    const d = await deploy.run();
+    if (!d.ok) return { ok: false, changed: true, verified: false, reason: "pushed, but the deploy failed: " + d.err, note: projectVendorsNote };
+  }
 
   // Verify the change is actually live: assert a truck name from the schedule is present.
   const firstDay = buildSchedule(bookings, vendors, { now })[0];

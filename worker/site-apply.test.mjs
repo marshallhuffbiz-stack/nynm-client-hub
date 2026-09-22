@@ -220,3 +220,58 @@ test("makeSiteShipper: verified deploy records meta.run.liveUrl so the portal ca
   // existing meta preserved (thread survives the writeback merge)
   assert.equal(done.patch.meta.thread[0].text, "hi");
 });
+
+// Injected deployer: run() executes the site's build + upload steps after the push.
+function fakeDeploy(ok = true, err = "wrangler exploded") {
+  const calls = [];
+  return { calls, run: async () => { calls.push("run"); return ok ? { ok: true } : { ok: false, err }; } };
+}
+
+test("applySiteChange: with a deployer, the upload runs after the push and before the live check", async () => {
+  const git = fakeGit(), io = fakeIO(true), live = fakeLive(true), deploy = fakeDeploy(true);
+  const res = await applySiteChange({ manifest: { files: ["a.html"], commitMessage: "m", verify: {} }, git, io, live, deploy });
+  assert.deepEqual(git.calls, ["add", "commit", "push"]);
+  assert.deepEqual(deploy.calls, ["run"]);
+  assert.equal(live.calls.length, 1);
+  assert.equal(res.ok, true);
+});
+
+test("applySiteChange: a failed deploy is reported as pushed-but-not-deployed, never done", async () => {
+  const git = fakeGit(), io = fakeIO(true), live = fakeLive(true), deploy = fakeDeploy(false, "step 3: 401 unauthorized");
+  const res = await applySiteChange({ manifest: { files: ["a.html"], commitMessage: "m", verify: {} }, git, io, live, deploy });
+  assert.equal(res.ok, false);
+  assert.equal(res.pushed, true);
+  assert.equal(res.deployed, false);
+  assert.match(res.reason, /deploy failed: step 3: 401/);
+  assert.equal(live.calls.length, 0, "no live check after a failed upload");
+});
+
+test("applySiteChange: already committed and not live yet → the deploy is retried, then re-checked", async () => {
+  let checks = 0;
+  const live = { url: "x", calls: [], check: async () => ({ ok: ++checks > 1, reason: "not live" }) };
+  const git = fakeGit(), io = fakeIO(false), deploy = fakeDeploy(true);
+  const res = await applySiteChange({ manifest: { files: ["a.html"], commitMessage: "m", verify: {} }, git, io, live, deploy });
+  assert.deepEqual(git.calls, [], "nothing re-committed");
+  assert.deepEqual(deploy.calls, ["run"]);
+  assert.equal(checks, 2);
+  assert.equal(res.ok, true);
+});
+
+test("applySiteChange: no deployer keeps the push-only path exactly as before", async () => {
+  const git = fakeGit(), io = fakeIO(true), live = fakeLive(true);
+  const res = await applySiteChange({ manifest: { files: ["a.html"], commitMessage: "m", verify: {} }, git, io, live });
+  assert.equal(res.ok, true);
+  assert.deepEqual(git.calls, ["add", "commit", "push"]);
+});
+
+test("makeDeployer: null without steps; runs steps in order in the site dir; a failing step stops and names itself", async () => {
+  const { makeDeployer } = await import("./site-apply.mjs");
+  assert.equal(makeDeployer({ dir: "/x" }), null);
+  assert.equal(makeDeployer({ dir: "/x", deploy: { steps: [] } }), null);
+  const okDeploy = makeDeployer({ dir: process.cwd(), deploy: { steps: [["true"], ["sh", "-c", "exit 0"]] } }, { PATH: process.env.PATH });
+  assert.deepEqual(await okDeploy.run(), { ok: true });
+  const bad = makeDeployer({ dir: process.cwd(), deploy: { steps: [["true"], ["sh", "-c", "echo boom >&2; exit 3"], ["true"]] } }, { PATH: process.env.PATH });
+  const r = await bad.run();
+  assert.equal(r.ok, false);
+  assert.match(r.err, /^sh -c echo boom >&2; exit 3: boom/);
+});
