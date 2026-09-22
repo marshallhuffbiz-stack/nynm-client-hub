@@ -27,10 +27,15 @@ if [ -z "$ACCOUNT_ID" ]; then
 fi
 [ -n "$ACCOUNT_ID" ] || { echo "FAILED: no account id found; rerun with CF_ACCOUNT_ID=<id> in front of the command."; exit 1; }
 echo "account id: ${ACCOUNT_ID:0:6}..."
-P="$(curl -s --max-time 20 "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects?per_page=50" -H "Authorization: Bearer $TOKEN")"
-printf '%s' "$P" | python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result");
-if r is None: print("FAILED: no Pages access:",d.get("errors")); sys.exit(1)
-print(f"Pages projects visible: {len(r)}"); [print("  "+p["name"]) for p in r]' || exit 1
+# Plain call, no list options: the Pages endpoint rejects per_page values it dislikes.
+P="$(curl -s --max-time 20 "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects" -H "Authorization: Bearer $TOKEN")"
+printf '%s' "$P" | python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result")
+if r is None:
+    codes={e.get("code") for e in d.get("errors",[])}
+    if codes & {10000,9109,10001,9106}: print("FAILED: the token has no Pages access:",d.get("errors")); sys.exit(1)
+    print("Note: could not list projects (",d.get("errors"),"), continuing; the proof upload will settle it.")
+else:
+    print(f"Pages projects visible: {len(r)}"); [print("  "+p["name"]) for p in r]' || exit 1
 
 echo "Writing the token to the VPS worker config..."
 printf '%s\n%s\n' "$TOKEN" "$ACCOUNT_ID" | ssh "$HOST" '
