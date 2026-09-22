@@ -15,9 +15,18 @@ IFS= read -r -s TOKEN; echo
 echo "Checking the token..."
 V="$(curl -s --max-time 20 https://api.cloudflare.com/client/v4/user/tokens/verify -H "Authorization: Bearer $TOKEN")"
 printf '%s' "$V" | python3 -c 'import sys,json;d=json.load(sys.stdin);ok=d.get("success") and d["result"].get("status")=="active";print("token status:",d.get("result",{}).get("status") or d.get("errors"));sys.exit(0 if ok else 1)' || { echo "FAILED: token not active."; exit 1; }
-A="$(curl -s --max-time 20 "https://api.cloudflare.com/client/v4/accounts?per_page=5" -H "Authorization: Bearer $TOKEN")"
-ACCOUNT_ID="$(printf '%s' "$A" | python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result") or [];print(r[0]["id"] if r else "")')"
-[ -n "$ACCOUNT_ID" ] || { echo "FAILED: the token cannot list an account (needs Account scope)."; exit 1; }
+# A Pages-only token cannot list accounts, so the account id comes from the wrangler
+# cache on this Mac (any client site repo has one) or from CF_ACCOUNT_ID.
+ACCOUNT_ID="${CF_ACCOUNT_ID:-}"
+if [ -z "$ACCOUNT_ID" ]; then
+  for f in "/Users/MarshallHuff/New General/mountain-power-wash/.wrangler/cache/wrangler-account.json" "$HOME"/.wrangler/config/*.toml; do
+    [ -f "$f" ] || continue
+    ACCOUNT_ID="$(grep -o -E '[0-9a-f]{32}' "$f" | head -1)"
+    [ -n "$ACCOUNT_ID" ] && break
+  done
+fi
+[ -n "$ACCOUNT_ID" ] || { echo "FAILED: no account id found; rerun with CF_ACCOUNT_ID=<id> in front of the command."; exit 1; }
+echo "account id: ${ACCOUNT_ID:0:6}..."
 P="$(curl -s --max-time 20 "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects?per_page=50" -H "Authorization: Bearer $TOKEN")"
 printf '%s' "$P" | python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result");
 if r is None: print("FAILED: no Pages access:",d.get("errors")); sys.exit(1)
